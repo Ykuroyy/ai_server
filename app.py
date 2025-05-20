@@ -19,7 +19,7 @@ else:
 
 # 画像を特徴量ベクトルに変換する関数
 def image_to_feature_vector(image_path):
-    img = Image.open(image_path).resize((100, 100)).convert("L")  # グレースケールに変換
+    img = Image.open(image_path).resize((100, 100))
     return np.array(img).flatten()
 
 
