@@ -1,79 +1,133 @@
 from flask import Flask, request, jsonify
 from PIL import Image
-import io
-import os
 import numpy as np
-from datetime import datetime
+import os
+import pickle
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import SVC
+
 
 app = Flask(__name__)
 
-REGISTER_FOLDER = "registered_images"
-UPLOAD_FOLDER = "uploaded_images"
-os.makedirs(REGISTER_FOLDER, exist_ok=True)
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# モデルとベクトライザの読み込み
+model_path = "product_recognition_model.pkl"
+if os.path.exists(model_path):
+    with open(model_path, "rb") as f:
+        model, vectorizer = pickle.load(f)
+else:
+    model, vectorizer = None, None
 
-def load_registered_images():
-    images = {}
-    for filename in os.listdir(REGISTER_FOLDER):
-        path = os.path.join(REGISTER_FOLDER, filename)
-        try:
-            img = Image.open(path).resize((64, 64)).convert('L')
-            images[filename] = np.array(img).astype("float32") / 255
-        except:
-            continue
-    return images
+# 画像を特徴量ベクトルに変換する関数
+def image_to_feature_vector(image_path):
+    img = Image.open(image_path).resize((100, 100)).convert("L")  # グレースケールに変換
+    return np.array(img).flatten()
 
-def predict_product(upload_image):
-    upload_image = upload_image.resize((64, 64)).convert('L')
-    upload_array = np.array(upload_image).astype("float32") / 255
 
-    min_diff = float('inf')
-    best_match = None
 
-    registered_images = load_registered_images()
-    for filename, img_array in registered_images.items():
-        diff = np.mean((upload_array - img_array) ** 2)
-        if diff < min_diff:
-            min_diff = diff
-            best_match = filename
 
-    if best_match:
-        name = os.path.splitext(best_match)[0]
-        return name
-    return None
 
-@app.route('/register_image', methods=['POST'])
+# 商品名を登録
+@app.route("/register_image", methods=["POST"])
 def register_image():
-    if 'image' not in request.files:
-        return jsonify({"error": "画像がありません"}), 400
+    if "image" not in request.files or "name" not in request.form:
+        return jsonify({"error": "image または name がありません"}), 400
 
-    image_file = request.files['image']
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    filename = f"{timestamp}.png"
-    save_path = os.path.join(REGISTER_FOLDER, filename)
-    image_file.save(save_path)
+    image = request.files["image"]
+    name = request.form["name"]
 
-    return jsonify({"message": f"画像を保存しました: {filename}"})
+    save_dir = "registered_images"
+    os.makedirs(save_dir, exist_ok=True)
+
+    filename = f"{name}.png"
+    path = os.path.join(save_dir, filename)
+    image.save(path)
+
+    print(f"✅ {filename} を保存")
+
+    # 再学習
+    try:
+        train_model()
+        return jsonify({"message": "登録完了・再学習済み"})
+    except Exception as e:
+        print(f"❌ 再学習失敗: {e}")  # ← この行を追加
+        return jsonify({"error": f"再学習失敗: {e}"}), 500
 
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    if 'image' not in request.files:
-        return jsonify({"error": "画像がありません"}), 400
 
-    image_file = request.files['image']
-    image = Image.open(io.BytesIO(image_file.read()))
 
-    result = predict_product(image)
+# train
+def train_model():
+    global model, vectorizer
+    images = []
+    labels = []
 
-    if result:
-        return jsonify({"name": result})
-    else:
-        return jsonify({"error": "商品が見つかりませんでした"}), 404
+    for filename in os.listdir("registered_images"):
+        label = filename.rsplit(".", 1)[0]
+        path = os.path.join("registered_images", filename)
+        vec = image_to_feature_vector(path)
+        images.append(vec)
+        labels.append(label)
 
-@app.route('/')
-def index():
-    return "AI Server is running", 200
+    vectorizer = TfidfVectorizer()
+    X = vectorizer.fit_transform([" ".join(map(str, v)) for v in images])
+    y = labels
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    model = SVC(kernel="linear")
+    model.fit(X, y)
+
+    with open("product_recognition_model.pkl", "wb") as f:
+        pickle.dump((model, vectorizer), f)
+
+    print(f"✅ モデル再学習完了：{len(y)} 件")
+
+
+
+
+
+
+
+
+
+# 商品名を予測するAPI
+@app.route("/predict", methods=["POST"])
+def predict_image():
+    print("✅ /predict に画像が届きました")
+
+    if "image" not in request.files:
+        print("❌ image が request.files にありません")
+        return jsonify({"error": "画像が見つかりません"}), 400
+
+    image = request.files["image"]
+    if image:
+        temp_path = "temp_image.png"
+        image.save(temp_path)
+        print("📷 画像保存済み: ", temp_path)
+
+        try:
+            vec = image_to_feature_vector(temp_path)
+            print("🧠 特徴ベクトル作成済み")
+
+            if model is not None and vectorizer is not None:
+                X = vectorizer.transform([" ".join(map(str, vec))])
+                prediction = model.predict(X)[0]
+                print(f"🎯 予測結果: {prediction}")
+                return jsonify({"name": prediction})
+            else:
+                print("⚠️ モデル未学習")
+                return jsonify({"error": "モデルが未学習です"}), 503
+        except Exception as e:
+            print("❌ 予測中にエラー: ", e)
+            return jsonify({"error": f"予測エラー: {e}"}), 500
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    return jsonify({"error": "画像が無効です"}), 400
+
+
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
