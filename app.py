@@ -4,13 +4,22 @@ from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import os
 
-app = Flask(__name__)
 
 # 保存ディレクトリ（存在しなければ作成）
 REGISTER_FOLDER = "registered_images"
+UPLOAD_FOLDER = "uploaded_images"
 TEMP_IMAGE_PATH = "temp_image.png"
 
+# Flask起動時に必要なフォルダを作成
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+app = Flask(__name__)
+
+
+
+
 
 # 画像比較用の関数（SSIM）
 def compare_images(img1, img2):
