@@ -51,7 +51,8 @@ def predict_image():
         image.save(TEMP_IMAGE_PATH)
         temp_img = Image.open(TEMP_IMAGE_PATH)
 
-        if not os.path.exists(REGISTER_FOLDER):
+        if not os.path.exists(REGISTER_FOLDER) or len(os.listdir(REGISTER_FOLDER)) == 0:
+            app.logger.warning("⚠️ 登録画像がありません！")
             return jsonify({"error": "登録済み商品がありません"}), 500
 
         max_score = -1
@@ -63,6 +64,11 @@ def predict_image():
                 continue
             reg_img = Image.open(reg_path)
             score = compare_images(temp_img, reg_img)
+
+            # ✅ ログ出力で確認
+            app.logger.info(f"比較: {filename} - 類似度スコア: {score:.4f}")
+
+
             if score > max_score:
                 max_score = score
                 best_match = filename.rsplit(".", 1)[0]
@@ -70,7 +76,9 @@ def predict_image():
         if os.path.exists(TEMP_IMAGE_PATH):
             os.remove(TEMP_IMAGE_PATH)
 
-        if best_match and max_score >= 0.6:
+        # if best_match and max_score >= 0.6:
+        # 一時的に変更（0.5くらい）
+        if best_match and max_score >= 0.5:
             return jsonify({"name": best_match, "score": round(max_score, 4)})
         else:
             return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
