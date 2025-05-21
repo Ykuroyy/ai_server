@@ -77,8 +77,8 @@ def predict_image():
             os.remove(TEMP_IMAGE_PATH)
 
         # if best_match and max_score >= 0.6:
-        # 一時的に変更（0.5くらい）
-        if best_match and max_score >= 0.5:
+        # 試しに下げる
+        if best_match and max_score >= 0.25:
             return jsonify({"name": best_match, "score": round(max_score, 4)})
         else:
             return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
