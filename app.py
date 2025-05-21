@@ -46,7 +46,8 @@ def register_image():
 # 商品名を予測（SSIMによる類似度比較）
 @app.route("/predict", methods=["POST"])
 def predict_image():
-    app.logger.info("✅ /predict にアクセス")
+    try:
+        app.logger.info("✅ /predict にアクセス")
     if "image" not in request.files:
         return jsonify({"error": "画像が見つかりません"}), 400
 
@@ -71,7 +72,8 @@ def predict_image():
                 max_score = score
                 best_match = filename.rsplit(".", 1)[0]
     except Exception as e:
-        return jsonify({"error": f"画像比較中にエラー: {str(e)}"}), 500
+        app.logger.error(f"🔥 /predict内で予期しないエラー: {str(e)}")
+        return jsonify({"error": "Flaskサーバー内でエラーが発生しました"}), 50
     finally:
         if os.path.exists(TEMP_IMAGE_PATH):
             os.remove(TEMP_IMAGE_PATH)
