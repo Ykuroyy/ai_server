@@ -3,7 +3,7 @@ from PIL import Image
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import os
-
+import logging
 
 # 保存ディレクトリ（存在しなければ作成）
 REGISTER_FOLDER = "registered_images"
@@ -16,6 +16,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 app = Flask(__name__)
+app.logger.setLevel(logging.INFO)
 
 
 
@@ -45,6 +46,7 @@ def register_image():
 # 商品名を予測（SSIMによる類似度比較）
 @app.route("/predict", methods=["POST"])
 def predict_image():
+    app.logger.info("✅ /predict にアクセス")
     if "image" not in request.files:
         return jsonify({"error": "画像が見つかりません"}), 400
 
@@ -80,4 +82,5 @@ def predict_image():
         return jsonify({"error": "一致する商品が見つかりません"}), 404
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))  # Renderが割り当てたポートを使う
+    app.run(host="0.0.0.0", port=port)
