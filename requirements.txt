@@ -4,5 +4,5 @@ Pillow==10.3.0
 torch==2.2.2
 scikit-image
 gunicorn
-
+Flask-CORS
 
