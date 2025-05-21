@@ -14,13 +14,8 @@ TEMP_IMAGE_PATH = "temp_image.png"
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
-
-
-
-
 
 # 画像比較用の関数（SSIM）
 def compare_images(img1, img2):
@@ -48,42 +43,44 @@ def register_image():
 def predict_image():
     try:
         app.logger.info("✅ /predict にアクセス")
-    if "image" not in request.files:
-        return jsonify({"error": "画像が見つかりません"}), 400
 
-    image = request.files["image"]
-    image.save(TEMP_IMAGE_PATH)
-    temp_img = Image.open(TEMP_IMAGE_PATH)
+        if "image" not in request.files:
+            return jsonify({"error": "画像が見つかりません"}), 400
 
-    if not os.path.exists(REGISTER_FOLDER):
-        return jsonify({"error": "登録済み商品がありません"}), 500
+        image = request.files["image"]
+        image.save(TEMP_IMAGE_PATH)
+        temp_img = Image.open(TEMP_IMAGE_PATH)
 
-    max_score = -1
-    best_match = None
+        if not os.path.exists(REGISTER_FOLDER):
+            return jsonify({"error": "登録済み商品がありません"}), 500
 
-    try:
+        max_score = -1
+        best_match = None
+
         for filename in os.listdir(REGISTER_FOLDER):
             reg_path = os.path.join(REGISTER_FOLDER, filename)
             if not filename.lower().endswith(".png"):
-                continue  # PNG以外無視（拡張性を意識）
+                continue
             reg_img = Image.open(reg_path)
             score = compare_images(temp_img, reg_img)
             if score > max_score:
                 max_score = score
                 best_match = filename.rsplit(".", 1)[0]
-    except Exception as e:
-        app.logger.error(f"🔥 /predict内で予期しないエラー: {str(e)}")
-        return jsonify({"error": "Flaskサーバー内でエラーが発生しました"}), 50
-    finally:
+
         if os.path.exists(TEMP_IMAGE_PATH):
             os.remove(TEMP_IMAGE_PATH)
 
-    if best_match and max_score >= 0.6:
-         return jsonify({"name": best_match, "score": round(max_score, 4)})
-    else:
-         return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
+        if best_match and max_score >= 0.6:
+            return jsonify({"name": best_match, "score": round(max_score, 4)})
+        else:
+            return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
 
+    except Exception as e:
+        app.logger.error(f"🔥 /predict内で予期しないエラー: {str(e)}")
+        if os.path.exists(TEMP_IMAGE_PATH):
+            os.remove(TEMP_IMAGE_PATH)
+        return jsonify({"error": "Flaskサーバー内でエラーが発生しました"}), 500
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Renderが割り当てたポートを使う
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
