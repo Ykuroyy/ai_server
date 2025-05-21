@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from PIL import Image
 from skimage.metrics import structural_similarity as ssim
+from flask_cors import CORS
 import numpy as np
 import os
 import logging
@@ -16,6 +17,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
 app.logger.setLevel(logging.INFO)
+CORS(app)
 
 # 画像比較用の関数（SSIM）
 def compare_images(img1, img2):
@@ -78,7 +80,7 @@ def predict_image():
 
         # if best_match and max_score >= 0.6:
         # 試しに下げる
-        if best_match and max_score >= 0.25:
+        if best_match and max_score >= 0.22:
             return jsonify({"name": best_match, "score": round(max_score, 4)})
         else:
             return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
