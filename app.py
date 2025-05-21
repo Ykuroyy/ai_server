@@ -76,10 +76,11 @@ def predict_image():
         if os.path.exists(TEMP_IMAGE_PATH):
             os.remove(TEMP_IMAGE_PATH)
 
-    if best_match:
-        return jsonify({"name": best_match, "score": round(max_score, 4)})
+    if best_match and max_score >= 0.6:
+         return jsonify({"name": best_match, "score": round(max_score, 4)})
     else:
-        return jsonify({"error": "一致する商品が見つかりません"}), 404
+         return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))  # Renderが割り当てたポートを使う
