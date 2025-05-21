@@ -1,2 +1,21 @@
+# 仮想環境
+venv/
+
+# Pythonキャッシュ
+__pycache__/
+*.pyc
+
+# 学習済みモデル・重いファイル
+*.pkl
+*.pt
+*.whl
+*.tar.gz
+
+# AI画像フォルダ
 registered_images/
 uploaded_images/
+
+echo "venv311/" >> .gitignore
+
+
+venv*/ 
