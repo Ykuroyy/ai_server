@@ -5,6 +5,8 @@ from flask_cors import CORS
 import numpy as np
 import os
 import logging
+import io 
+import requests
 
 # 保存ディレクトリ（存在しなければ作成）
 REGISTER_FOLDER = "registered_images"
@@ -42,11 +44,16 @@ def register_image():
     name = request.form.get("name")
     image_url = request.form.get("image_url")
 
+    print(f"✅ image_url 受信: {image_url}")
+
     if not name or not image_url:
+        print("❌ nameまたはimage_urlが空")
         return "Invalid request", 400
 
     try:
         response = requests.get(image_url)
+        print(f"🌐 ダウンロードステータス: {response.status_code}")
+
         img = Image.open(io.BytesIO(response.content))
         save_path = os.path.join("registered_images", f"{name}.png")
         img.save(save_path)
