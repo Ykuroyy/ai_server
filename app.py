@@ -39,14 +39,25 @@ def ping():
 # 商品画像を登録（画像保存のみ）
 @app.route("/register_image", methods=["POST"])
 def register_image():
-    if "image" not in request.files or "name" not in request.form:
-        return jsonify({"error": "image または name がありません"}), 400
+    name = request.form.get("name")
+    image_url = request.form.get("image_url")
 
-    image = request.files["image"]
-    name = request.form["name"]
+    if not name or not image_url:
+        return "Invalid request", 400
 
-    image.save(os.path.join(REGISTER_FOLDER, f"{name}.png"))
-    return jsonify({"message": f"{name} を保存しました"})
+    try:
+        response = requests.get(image_url)
+        img = Image.open(io.BytesIO(response.content))
+        save_path = os.path.join("registered_images", f"{name}.png")
+        img.save(save_path)
+        return "OK", 200
+    except Exception as e:
+        app.logger.error(f"画像保存エラー: {e}")
+        return "Error", 500
+
+
+
+
 
 # 商品名を予測（SSIMによる類似度比較）
 @app.route("/predict", methods=["POST"])
