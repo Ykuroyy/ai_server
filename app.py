@@ -28,6 +28,14 @@ def compare_images(img1, img2):
     score, _ = ssim(arr1, arr2, full=True)
     return score
 
+
+@app.route("/ping", methods=["GET"])
+def ping():
+    return "ok", 200
+
+
+
+
 # 商品画像を登録（画像保存のみ）
 @app.route("/register_image", methods=["POST"])
 def register_image():
