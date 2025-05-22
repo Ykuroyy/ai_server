@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from PIL import Image
 from skimage.metrics import structural_similarity as ssim
 from flask_cors import CORS
+from flask import send_file
 import numpy as np
 import os
 import logging
@@ -116,6 +117,21 @@ def predict_image():
         if os.path.exists(TEMP_IMAGE_PATH):
             os.remove(TEMP_IMAGE_PATH)
         return jsonify({"error": "Flaskサーバー内でエラーが発生しました"}), 500
+
+
+
+
+@app.route("/list_registered", methods=["GET"])
+def list_registered_images():
+    try:
+        files = os.listdir("registered_images")
+        return jsonify({"files": files})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
