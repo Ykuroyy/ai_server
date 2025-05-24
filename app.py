@@ -1,144 +1,87 @@
+# app.py  ★不要部分を削ってシンプルに
 from flask import Flask, request, jsonify
-from PIL import Image
-from skimage.metrics import structural_similarity as ssim
 from flask_cors import CORS
-from flask import send_file
-
-from PIL import ImageFile
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-
+from PIL import Image, ImageOps, ImageFile
+from skimage.metrics import structural_similarity as ssim
+from werkzeug.utils import secure_filename
 
 import numpy as np
-import os
-import logging
-import io 
-import requests
+import os, logging
 
-# 保存ディレクトリ（存在しなければ作成）
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# ディレクトリ
 REGISTER_FOLDER = "registered_images"
-UPLOAD_FOLDER = "uploaded_images"
-TEMP_IMAGE_PATH = "temp_image.png"
-
-# Flask起動時に必要なフォルダを作成
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app = Flask(__name__)
-app.logger.setLevel(logging.INFO)
 CORS(app)
+app.logger.setLevel(logging.INFO)
 
-# 画像比較用の関数（SSIM）
-def compare_images(img1, img2):
-    img1 = img1.resize((100, 100)).convert("L")
-    img2 = img2.resize((100, 100)).convert("L")
-    arr1 = np.array(img1)
-    arr2 = np.array(img2)
-    score, _ = ssim(arr1, arr2, full=True)
-    return score
+# ---------- 共通前処理 ----------
+def preprocess_pil(img: Image.Image, size=100) -> Image.Image:
+    img = ImageOps.exif_transpose(img).convert("L").resize((size, size))
+    return img
 
 
-@app.route("/ping", methods=["GET"])
+# ---------- ヘルスチェック ----------
+@app.route("/ping")
 def ping():
     return "ok", 200
 
 
-
-
-# 商品画像を登録（画像保存のみ）
+# ---------- 画像登録 ----------
 @app.route("/register_image", methods=["POST"])
 def register_image():
-    name = request.form.get("name")
-    image_url = request.form.get("image_url")
-
-    print(f"✅ image_url 受信: {image_url}")
-
-    if not name or not image_url:
-        print("❌ nameまたはimage_urlが空")
-        return "Invalid request", 400
+    name  = request.form.get("name")
+    file  = request.files.get("image")
+    if not name or not file:
+        return "invalid request", 400
 
     try:
-        response = requests.get(image_url)
-        print(f"🌐 ダウンロードステータス: {response.status_code}")
-
-        img = Image.open(io.BytesIO(response.content))
-        save_path = os.path.join("registered_images", f"{name}.png")
-        img.save(save_path)
+        img = preprocess_pil(Image.open(file.stream), size=100)
+        path = os.path.join(REGISTER_FOLDER, secure_filename(f"{name}.jpg"))
+        img.save(path, format="JPEG", quality=85)
         return "OK", 200
+
     except Exception as e:
-        app.logger.error(f"画像保存エラー: {e}")
-        return "Error", 500
+        app.logger.exception(e)
+        return "error", 500
 
 
-
-
-
-# 商品名を予測（SSIMによる類似度比較）
+# ---------- 画像予測 ----------
 @app.route("/predict", methods=["POST"])
-def predict_image():
-    try:
-        app.logger.info("✅ /predict にアクセス")
+def predict():
+    file = request.files.get("image")
+    if not file:
+        return jsonify(error="画像がありません"), 400
 
-        if "image" not in request.files:
-            return jsonify({"error": "画像が見つかりません"}), 400
+    query = preprocess_pil(Image.open(file.stream), size=100)
+    q_arr = np.asarray(query)
 
-        image = request.files["image"]
-        image.save(TEMP_IMAGE_PATH)
-        temp_img = Image.open(TEMP_IMAGE_PATH)
+    if not os.listdir(REGISTER_FOLDER):
+        return jsonify(error="登録済み画像なし"), 500
 
-        if not os.path.exists(REGISTER_FOLDER) or len(os.listdir(REGISTER_FOLDER)) == 0:
-            app.logger.warning("⚠️ 登録画像がありません！")
-            return jsonify({"error": "登録済み商品がありません"}), 500
+    best, best_score = None, -1
+    for fname in os.listdir(REGISTER_FOLDER):
+        if not fname.lower().endswith((".jpg", ".jpeg")):
+            continue
+        r_arr = np.asarray(Image.open(os.path.join(REGISTER_FOLDER, fname)))
+        score, _ = ssim(q_arr, r_arr, full=True)
+        if score > best_score:
+            best_score, best = score, os.path.splitext(fname)[0]
 
-        max_score = -1
-        best_match = None
-
-        for filename in os.listdir(REGISTER_FOLDER):
-            reg_path = os.path.join(REGISTER_FOLDER, filename)
-            if not filename.lower().endswith(".png"):
-                continue
-            reg_img = Image.open(reg_path)
-            score = compare_images(temp_img, reg_img)
-
-            # ✅ ログ出力で確認
-            app.logger.info(f"比較: {filename} - 類似度スコア: {score:.4f}")
+    if best and best_score >= 0.22:
+        return jsonify(name=best, score=round(best_score, 4))
+    return jsonify(error="一致なし", score=round(best_score, 4)), 404
 
 
-            if score > max_score:
-                max_score = score
-                best_match = filename.rsplit(".", 1)[0]
-
-        if os.path.exists(TEMP_IMAGE_PATH):
-            os.remove(TEMP_IMAGE_PATH)
-
-        # if best_match and max_score >= 0.6:
-        # 試しに下げる
-        if best_match and max_score >= 0.22:
-            return jsonify({"name": best_match, "score": round(max_score, 4)})
-        else:
-            return jsonify({"error": "一致する商品が見つかりません", "score": round(max_score, 4)}), 404
-
-    except Exception as e:
-        app.logger.error(f"🔥 /predict内で予期しないエラー: {str(e)}")
-        if os.path.exists(TEMP_IMAGE_PATH):
-            os.remove(TEMP_IMAGE_PATH)
-        return jsonify({"error": "Flaskサーバー内でエラーが発生しました"}), 500
-
-
-
-
-@app.route("/list_registered", methods=["GET"])
-def list_registered_images():
-    try:
-        files = os.listdir("registered_images")
-        return jsonify({"files": files})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-
+# ---------- 登録済み一覧 ----------
+@app.route("/list_registered")
+def list_registered():
+    return jsonify(files=os.listdir(REGISTER_FOLDER))
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run("0.0.0.0", port, debug=False)
