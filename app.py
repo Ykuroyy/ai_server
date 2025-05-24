@@ -3,6 +3,12 @@ from PIL import Image
 from skimage.metrics import structural_similarity as ssim
 from flask_cors import CORS
 from flask import send_file
+
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+
 import numpy as np
 import os
 import logging
