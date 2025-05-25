@@ -30,8 +30,12 @@ CORS(app)
 app.logger.setLevel(logging.INFO)
 
 # 前処理（グレースケール＋リサイズ）
-def preprocess_pil(img: Image.Image, size=100) -> Image.Image:
-    return ImageOps.exif_transpose(img).convert("L").resize((size, size))
+def preprocess_pil(img: Image.Image, size=200) -> Image.Image:
+    img = img.convert("L")                      # グレースケール化
+    img = ImageOps.exif_transpose(img)         # 回転を正しく
+    img = ImageOps.fit(img, (size, size))      # サイズ統一 & クロップ
+    img = ImageOps.autocontrast(img)           # 明るさ補正
+    return img
 
 
 @app.route("/ping")
@@ -110,7 +114,7 @@ def predict():
                 best_score = score
                 best = fn
 
-        if best and best_score >= 0.22:
+        if best and best_score >= 0.5:
             filename_with_ext = best if best.endswith(".jpg") else best + ".jpg"
             predicted_name = name_mapping.get(filename_with_ext, os.path.splitext(best)[0])
             app.logger.info(f"🎯 matched: {filename_with_ext} → {predicted_name}")
