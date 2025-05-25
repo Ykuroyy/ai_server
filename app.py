@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image, ImageOps, ImageFile
 from skimage.metrics import structural_similarity as ssim
 from werkzeug.utils import secure_filename
 import numpy as np
 import os, logging
+import uuid
+import json
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -12,13 +14,21 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 REGISTER_FOLDER = "registered_images"
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
 
+# 商品名マッピングファイル
+MAPPING_FILE = "name_mapping.json"
+try:
+    with open(MAPPING_FILE, "r", encoding="utf-8") as f:
+        name_mapping = json.load(f)
+except:
+    name_mapping = {}
+
+# Flask アプリ設定
 app = Flask(__name__)
 CORS(app)
 app.logger.setLevel(logging.INFO)
 
-
+# 前処理（グレースケール＋リサイズ）
 def preprocess_pil(img: Image.Image, size=100) -> Image.Image:
-    # SSIM 用にグレースケール＆リサイズ
     return ImageOps.exif_transpose(img).convert("L").resize((size, size))
 
 
@@ -31,25 +41,31 @@ def ping():
 def register_image():
     name = request.form.get("name")
     file = request.files.get("image")
+    app.logger.info(f"📌 received name: {name}, image.filename: {file.filename if file else 'None'}")
+
     if not name or not file:
         return "invalid request", 400
 
     try:
-        # → JPEG に変換＆大きすぎる場合は最大 640px に縮小
+        # 画像変換＆リサイズ
         img = Image.open(file.stream)
         img = ImageOps.exif_transpose(img).convert("RGB")
-       
-        # Pillow 10.x 以降では ANTIALIAS は Resampling.LANCZOS に置き換わりました
-      
         img.thumbnail((640, 640), Image.Resampling.LANCZOS)
 
-
-
-        # フルサイズを保存（比較用登録）
-        save_path = os.path.join(REGISTER_FOLDER, secure_filename(f"{name}.jpg"))
+        # UUIDファイル名で保存
+        filename = f"{uuid.uuid4().hex}.jpg"
+        save_path = os.path.join(REGISTER_FOLDER, filename)
         img.save(save_path, format="JPEG", quality=80, optimize=True)
 
+        # 🔽 商品名マッピングを保存＋ファイル書き込み
+        name_mapping[filename] = name
+        with open(MAPPING_FILE, "w", encoding="utf-8") as f:
+            json.dump(name_mapping, f, ensure_ascii=False, indent=2)
+        app.logger.info(f"✅ name_mapping 登録: {filename} → {name}")
+        app.logger.info(f"✅ saved to: {save_path} (商品名: {name})")
+
         return "OK", 200
+
     except Exception as e:
         app.logger.exception(e)
         return "error", 500
@@ -62,7 +78,6 @@ def predict():
         return jsonify(error="画像がありません"), 400
 
     try:
-        # → まずはメモリ上で JPEG として開き、リサイズ＆グレースケール
         raw = Image.open(file.stream)
         query = preprocess_pil(raw, size=100)
         q_arr = np.asarray(query)
@@ -72,17 +87,22 @@ def predict():
 
         best, best_score = None, -1
         for fn in os.listdir(REGISTER_FOLDER):
-            if not fn.lower().endswith((".jpg", ".jpeg")):
+            if not fn.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
-            ref = Image.open(os.path.join(REGISTER_FOLDER, fn)).convert("L").resize((100,100))
+            ref = Image.open(os.path.join(REGISTER_FOLDER, fn)).convert("L").resize((100, 100))
             r_arr = np.asarray(ref)
             score, _ = ssim(q_arr, r_arr, full=True)
             if score > best_score:
-                best_score, best = score, os.path.splitext(fn)[0]
+                best_score = score
+                best = fn
 
         if best and best_score >= 0.22:
-            return jsonify(name=best, score=round(best_score,4))
-        return jsonify(error="一致なし", score=round(best_score,4)), 404
+            filename_with_ext = best if best.endswith(".jpg") else best + ".jpg"
+            predicted_name = name_mapping.get(filename_with_ext, os.path.splitext(best)[0])
+            app.logger.info(f"🎯 matched: {filename_with_ext} → {predicted_name}")
+            return jsonify(name=predicted_name, score=round(best_score, 4))
+
+        return jsonify(error="一致なし", score=round(best_score, 4)), 404
 
     except Exception as e:
         app.logger.exception(e)
