@@ -80,6 +80,7 @@ def register_image():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
+        app.logger.info("📥 /predict にリクエスト受信")
         # ✅ 1. 本番環境（S3のURLが送られてくる）
         if "image_url" in request.form:
             image_url = request.form["image_url"]
@@ -114,7 +115,7 @@ def predict():
                 best_score = score
                 best = fn
 
-        if best and best_score >= 0.5:
+        if best and best_score >= 0.3:
             filename_with_ext = best if best.endswith(".jpg") else best + ".jpg"
             predicted_name = name_mapping.get(filename_with_ext, os.path.splitext(best)[0])
             app.logger.info(f"🎯 matched: {filename_with_ext} → {predicted_name}")
