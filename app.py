@@ -38,7 +38,12 @@ def register_image():
         # → JPEG に変換＆大きすぎる場合は最大 640px に縮小
         img = Image.open(file.stream)
         img = ImageOps.exif_transpose(img).convert("RGB")
-        img.thumbnail((640, 640), Image.ANTIALIAS)
+       
+        # Pillow 10.x 以降では ANTIALIAS は Resampling.LANCZOS に置き換わりました
+      
+        img.thumbnail((640, 640), Image.Resampling.LANCZOS)
+
+
 
         # フルサイズを保存（比較用登録）
         save_path = os.path.join(REGISTER_FOLDER, secure_filename(f"{name}.jpg"))
