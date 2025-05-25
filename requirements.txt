@@ -1,9 +1,8 @@
 Flask==2.3.2
+Flask-Cors==4.0.0           # ※正式パッケージ名（PyPIに登録されている名前）
 numpy==1.26.4
 Pillow==10.3.0
 torch==2.2.2
-scikit-image
+scikit-image==0.22.0        # ※バージョンを明記して環境差を防ぐ
 gunicorn
-Flask-CORS
 requests==2.31.0
-

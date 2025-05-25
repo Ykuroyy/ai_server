@@ -7,6 +7,8 @@ import numpy as np
 import os, logging
 import uuid
 import json
+import requests
+from io import BytesIO
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -73,18 +75,30 @@ def register_image():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    file = request.files.get("image")
-    if not file:
-        return jsonify(error="画像がありません"), 400
-
     try:
-        raw = Image.open(file.stream)
+        # ✅ 1. 本番環境（S3のURLが送られてくる）
+        if "image_url" in request.form:
+            image_url = request.form["image_url"]
+            response = requests.get(image_url)
+            response.raise_for_status()
+            raw = Image.open(BytesIO(response.content))
+
+        # ✅ 2. 開発環境（ローカル画像が multipart で送られてくる）
+        elif "image" in request.files:
+            file = request.files["image"]
+            raw = Image.open(file.stream)
+
+        else:
+            return jsonify(error="画像がありません"), 400
+
+        # 画像の前処理
         query = preprocess_pil(raw, size=100)
         q_arr = np.asarray(query)
 
         if not os.listdir(REGISTER_FOLDER):
             return jsonify(error="登録済み画像なし"), 500
 
+        # 一番近い画像を探す
         best, best_score = None, -1
         for fn in os.listdir(REGISTER_FOLDER):
             if not fn.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -107,6 +121,7 @@ def predict():
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
+
 
 
 if __name__ == "__main__":
