@@ -88,6 +88,10 @@ def predict():
     S3 バケット上の全画像と比較して最も類似度の高い商品を返却
     """
     try:
+        # ←① ブロック最上部に入れる
+        app.logger.info("🛠 Enter /predict")
+
+   
         app.logger.info("📥 /predict リクエスト受信")
 
         # 本番：S3 上の URL が送られてくる場合
@@ -108,32 +112,34 @@ def predict():
         query = preprocess_pil(raw, size=100)
         q_arr = np.asarray(query)
 
-        # S3 バケット内のオブジェクト一覧をページングで取得
+
+        # ←② ループ前に「何件あるか」出力する
         paginator = s3.get_paginator("list_objects_v2")
-        page_iterator = paginator.paginate(Bucket=S3_BUCKET)
+        pages    = list(paginator.paginate(Bucket=S3_BUCKET))
+        total    = sum(len(p.get("Contents", [])) for p in pages)
+        app.logger.info(f"🛠 S3 に登録されている画像数: {total}")
 
         best_score = -1.0
         best_key   = None
 
-        for page in page_iterator:
+
+        # ←③ 実際の比較ループの先頭に入れる
+        for page in pages:
             for obj in page.get("Contents", []):
                 key = obj["Key"]
-                # 対象ファイル拡張子のみ
                 if not key.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
 
-                # S3 から画像をダウンロード
+                app.logger.debug(f"🛠 comparing key: {key}")
+
+                # ここから既存の SSIM 計算＋ログ出力
                 resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
-                body = resp["Body"].read()
-                img = Image.open(BytesIO(body))
-
-                # 前処理＋配列化
-                ref = preprocess_pil(img, size=100)
+                img  = Image.open(BytesIO(resp["Body"].read()))
+                ref  = preprocess_pil(img, size=100)
                 r_arr = np.asarray(ref)
-
-                # SSIM 類似度計算＆ログ出力
                 score, _ = ssim(q_arr, r_arr, full=True)
                 app.logger.info(f"比較: {key} – 類似度スコア: {score:.4f}")
+                
 
                 # ベスト更新
                 if score > best_score:
