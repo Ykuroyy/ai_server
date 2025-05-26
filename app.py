@@ -76,7 +76,22 @@ def register_image():
             json.dump(name_mapping, f, ensure_ascii=False, indent=2)
 
         app.logger.info(f"✅ saved to: {save_path} (商品名: {name})")
+       
+       # ← ここから追加
+        s3.upload_file(
+          Filename=save_path,
+          Bucket=S3_BUCKET,
+          Key=filename,
+          ExtraArgs={'ContentType': 'image/jpeg'}
+        )
+        app.logger.info(f"☁️ uploaded to S3: s3://{S3_BUCKET}/{filename}")
+        # ← ここまで
+               
+       
+       
+       
         return "OK", 200
+
 
     except Exception as e:
         app.logger.exception(e)
@@ -139,7 +154,6 @@ def predict():
                 r_arr = np.asarray(ref)
                 score, _ = ssim(q_arr, r_arr, full=True)
                 app.logger.info(f"比較: {key} – 類似度スコア: {score:.4f}")
-                
 
                 # ベスト更新
                 if score > best_score:
