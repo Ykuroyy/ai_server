@@ -6,3 +6,4 @@ torch==2.2.2
 scikit-image==0.22.0        # ※バージョンを明記して環境差を防ぐ
 gunicorn
 requests==2.31.0
+boto3>=1.38.23
