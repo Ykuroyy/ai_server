@@ -108,12 +108,22 @@ def predict():
         for fn in os.listdir(REGISTER_FOLDER):
             if not fn.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
+
+            # 登録画像の読み込み＋前処理
             ref = Image.open(os.path.join(REGISTER_FOLDER, fn)).convert("L").resize((100, 100))
             r_arr = np.asarray(ref)
+
+            # 類似度計算
             score, _ = ssim(q_arr, r_arr, full=True)
+
+            # ←ここで全件ログ出力する
+            app.logger.info(f"比較: {fn} - 類似度スコア: {score:.4f}")
+
+            # 最良スコアの更新
             if score > best_score:
                 best_score = score
                 best = fn
+     
 
         if best and best_score >= 0.3:
             filename_with_ext = best if best.endswith(".jpg") else best + ".jpg"
