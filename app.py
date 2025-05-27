@@ -62,6 +62,21 @@ def calc_color_hist_score(pil_raw: Image.Image, pil_ref: Image.Image, size=100) 
     return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
 
 
+# 追加：ROI（パン領域）だけ切り出す関数
+def crop_to_object(pil_img, thresh=200):
+    arr = np.array(pil_img.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    # 明るい背景を反転二値化
+    _, binimg = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
+    # 輪郭検出
+    cnts, _ = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return pil_img
+    c = max(cnts, key=cv2.contourArea)
+    x,y,w,h = cv2.boundingRect(c)
+    return pil_img.crop((x, y, x+w, y+h))
+
+
 
 
 # S3 クライアント（環境変数の認証情報を利用）
@@ -123,9 +138,14 @@ def predict():
             resp = requests.get(image_url)
             resp.raise_for_status()
             raw = Image.open(BytesIO(resp.content))
+            # ← URL で取得した画像も切り出す
+            raw = crop_to_object(raw)
+
         # 開発：multipart で送られてきた画像
         elif "image" in request.files:
             raw = Image.open(request.files["image"].stream)
+            # ← カメラ撮影画像も切り出し
+            raw = crop_to_object(raw) 
         else:
             return jsonify(error="画像がありません"), 400
 
@@ -156,6 +176,9 @@ def predict():
                 # 参照画像取得＆前処理
                 resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
                 img  = Image.open(BytesIO(resp["Body"].read()))
+                # パン領域だけ切り出し
+                img = crop_to_object(img)
+
                 ref  = preprocess_pil(img, size=100)
                 r_arr = np.asarray(ref)
 
@@ -175,7 +198,7 @@ def predict():
                     best_score = final_score
                     best_key   = key
 
-                    
+
         # マッチなし
         if best_key is None:
             return jsonify(error="一致なし", score=0), 404
