@@ -12,6 +12,11 @@ from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import cv2
 
+
+# 追加：ORB とマッチャー
+orb = cv2.ORB_create()
+bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
 # トランケートされた画像も読み込めるように
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -60,6 +65,22 @@ def calc_color_hist_score(pil_raw: Image.Image, pil_ref: Image.Image, size=100) 
     cv2.normalize(ref_hist, ref_hist)
     # 相関係数で比較（1に近いほど似ている）
     return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
+
+
+def calc_orb_score(pil_raw: Image.Image, pil_ref: Image.Image, size=200) -> float:
+    # PIL→グレースケール NumPy
+    raw = np.array(pil_raw.convert("L").resize((size, size)))
+    ref = np.array(pil_ref.convert("L").resize((size, size)))
+    # キーポイント＆特徴量抽出
+    kp1, des1 = orb.detectAndCompute(raw, None)
+    kp2, des2 = orb.detectAndCompute(ref, None)
+    if des1 is None or des2 is None:
+        return 0.0
+    # マッチング
+    matches = bf.match(des1, des2)
+    # マッチ数をベースに正規化
+    score = len(matches) / max(len(kp1), 1)
+    return float(score)
 
 
 # 追加：ROI（パン領域）だけ切り出す関数
@@ -186,12 +207,17 @@ def predict():
                 score_ssim, _ = ssim(q_arr, r_arr, full=True)
                 # 色ヒストグラム
                 score_hist     = calc_color_hist_score(raw, img, size=100)
+                # ORB 特徴点マッチング
+                score_orb      = calc_orb_score(raw, img, size=200)
                 # 合成スコア
-                final_score    = 0.7 * score_ssim + 0.3 * score_hist
+                final_score    = 0.5 * score_ssim + 0.2 * score_hist + 0.3 * score_orb
 
                 app.logger.info(
-                    f"比較: {key} – SSIM={score_ssim:.3f}, "
-                    f"HIST={score_hist:.3f}, FINAL={final_score:.3f}"
+                    f"比較: {key} – "
+                    f"SSIM={score_ssim:.3f}, "
+                    f"HIST={score_hist:.3f}, "
+                    f"ORB={score_orb:.3f}, "
+                    f"FINAL={final_score:.3f}"
                 )
 
                 if final_score > best_score:
