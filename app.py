@@ -188,17 +188,21 @@ def predict():
 
                 scores.append((key, final_score))
 
-        # 上位3件を JSON で返却
-        scores.sort(key=lambda x: x[1], reverse=True)
-        top3 = [
-            {
-                "key":   k,
-                "name":  name_mapping.get(k, os.path.splitext(k)[0]),
-                "score": round(s, 4),
-            }
-            for k, s in scores[:3]
-        ]
-        return jsonify(candidates=top3), 200
+                # ソート済み scores の先頭がベストマッチ
+                best_key, best_score = scores[0]
+                predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
+
+                # 2～4番目を候補として添える
+                candidates = [
+                    {"name": name_mapping.get(k, os.path.splitext(k)[0]), "score": round(s,4)}
+                    for k, s in scores[1:4]
+                ]
+
+                return jsonify(
+                    name=predicted,
+                    score=round(best_score, 4),
+                    candidates=candidates
+                ), 200
 
     except Exception as e:
         app.logger.exception(e)
