@@ -88,18 +88,8 @@ def calc_color_hist_score(raw_img: Image.Image, ref_img: Image.Image, size=100) 
     raw_hist = cv2.calcHist([raw_hsv], [0], None, [h_bins], [0, 180])
     ref_hist = cv2.calcHist([ref_hsv], [0], None, [h_bins], [0, 180])
     cv2.normalize(raw_hist, raw_hist)
-   error="一致なし", score=0), 404
-
-        # しきい値以下は認識失敗
-        if best_score < 0.5:
-            return jsonify(error="認識精度不足", score=round(best_score, 3)), 404
-
-        predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
-        return jsonify(name=predicted, score=round(best_score, 4)), 200
-
-    except Exception as e:
-        app.logger.exception(e)
-        return jsonify(error="処理エラー"), 500 cv2.normalize(ref_hist, ref_hist)
+    cv2.normalize(ref_hist, ref_hist)
+    # この関数ではここで必ず float を返すだけ
     return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
 
 def calc_orb_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> float:
@@ -125,7 +115,6 @@ def calc_sift_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> flo
 
 
 # ── エンドポイント：画像登録 ───────────────────────────
-# ── エンドポイント：画像認識 ───────────────────────────
 @api.route("/predict", methods=["POST"])
 def predict():
     try:
