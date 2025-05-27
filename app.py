@@ -183,8 +183,8 @@ def predict():
 
      
 
-# Blueprint 登録と起動
-app.register_blueprint(api, url_prefix="/api")
+# ── エンドポイント：画像認識 ───────────────────────────
+@app.route("/predict", methods=["POST"])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
