@@ -35,6 +35,30 @@ try:
 except FileNotFoundError:
     name_mapping = {}
 
+
+# ── ここから追加 ──
+# S3 に現在存在しているキーを全部拾ってセット化
+paginator   = s3.get_paginator("list_objects_v2")
+valid_keys  = set()
+for page in paginator.paginate(Bucket=S3_BUCKET):
+    for obj in page.get("Contents", []):
+        valid_keys.add(obj["Key"])
+
+# name_mapping をフィルタリング
+orig_count = len(name_mapping)
+name_mapping = {
+    k: v for k, v in name_mapping.items()
+    if k in valid_keys
+}
+filtered_count = len(name_mapping)
+app.logger.info(
+    f"マッピングフィルタリング: 元{orig_count}件 → 現在S3上にあるのは{filtered_count}件"
+)
+# ── ここまで追加 ──
+
+
+
+
 # Flask アプリ設定
 app = Flask(__name__)
 CORS(app)
@@ -229,8 +253,15 @@ def predict():
         if best_key is None:
             return jsonify(error="一致なし", score=0), 404
 
-        # 商品名マッピング or ファイル名ベース
+
+
+         # 信頼度しきい値チェック（0.8 は例なのでチューニングしてください）
+        if best_score < 0.2:
+            app.logger.warn(f"信頼度不足: best_score={best_score:.3f}")
+            return jsonify(error="認識精度不足", score=round(best_score,3)), 404
+ 
         predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
+
         app.logger.info(f"🎯 matched: {best_key} → {predicted} (score={best_score:.4f})")
 
         return jsonify(name=predicted, score=round(best_score, 4)), 200
