@@ -88,7 +88,18 @@ def calc_color_hist_score(raw_img: Image.Image, ref_img: Image.Image, size=100) 
     raw_hist = cv2.calcHist([raw_hsv], [0], None, [h_bins], [0, 180])
     ref_hist = cv2.calcHist([ref_hsv], [0], None, [h_bins], [0, 180])
     cv2.normalize(raw_hist, raw_hist)
-    cv2.normalize(ref_hist, ref_hist)
+   error="一致なし", score=0), 404
+
+        # しきい値以下は認識失敗
+        if best_score < 0.5:
+            return jsonify(error="認識精度不足", score=round(best_score, 3)), 404
+
+        predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
+        return jsonify(name=predicted, score=round(best_score, 4)), 200
+
+    except Exception as e:
+        app.logger.exception(e)
+        return jsonify(error="処理エラー"), 500 cv2.normalize(ref_hist, ref_hist)
     return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
 
 def calc_orb_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> float:
@@ -114,42 +125,6 @@ def calc_sift_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> flo
 
 
 # ── エンドポイント：画像登録 ───────────────────────────
-@api.route("/register_image", methods=["POST"])
-def register_image():
-    name = request.form.get("name")
-    file = request.files.get("image")
-    if not name or not file:
-        return "invalid request", 400
-
-    try:
-        img = Image.open(file.stream)
-        img = ImageOps.exif_transpose(img).convert("RGB")
-        img.thumbnail((640, 640), Image.Resampling.LANCZOS)
-
-        filename = f"{uuid.uuid4().hex}.jpg"
-        save_path = os.path.join(REGISTER_FOLDER, filename)
-        img.save(save_path, format="JPEG", quality=80, optimize=True)
-
-        # マッピング更新
-        name_mapping[filename] = name
-        with open(MAPPING_FILE, "w", encoding="utf-8") as f:
-            json.dump(name_mapping, f, ensure_ascii=False, indent=2)
-
-        # S3 アップロード
-        s3.upload_file(
-            Filename=save_path,
-            Bucket=S3_BUCKET,
-            Key=filename,
-            ExtraArgs={"ContentType": "image/jpeg"}
-        )
-        app.logger.info(f"☁️ uploaded to S3: s3://{S3_BUCKET}/{filename}")
-        return "OK", 200
-
-    except Exception as e:
-        app.logger.exception(e)
-        return "error", 500
-
-
 # ── エンドポイント：画像認識 ───────────────────────────
 @api.route("/predict", methods=["POST"])
 def predict():
@@ -170,8 +145,11 @@ def predict():
         q_arr  = np.asarray(query)
 
         # S3 上の全キー取得
-        pages = list(s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET))
-        best_score, best_key = -1.0, None
+        pages = list(s3.get_paginator("list_objects_v2")
+                         .paginate(Bucket=S3_BUCKET))
+
+        # ① scores リストを用意
+        scores = []
 
         # 比較ループ
         for page in pages:
@@ -180,7 +158,7 @@ def predict():
                 if not key.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
 
-                # 参照画像取得
+                # 参照画像取得＋前処理
                 resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
                 img  = Image.open(BytesIO(resp["Body"].read()))
                 img  = crop_to_object(img)
@@ -191,28 +169,30 @@ def predict():
                 score_ssim = ssim(q_arr, r_arr, full=True)[0]
                 score_hist = calc_color_hist_score(raw, img)
                 score_sift = calc_sift_score(raw, img)
-                # ORB も試したい場合は calc_orb_score(raw, img)
 
-                # 合成スコア（重みはチューニング可能）
+                # 合成スコア（チューニング可）
                 final_score = 0.6 * score_ssim + 0.1 * score_hist + 0.3 * score_sift
 
-                if final_score > best_score:
-                    best_score, best_key = final_score, key
+                # ② スコアを蓄積
+                scores.append((key, final_score))
 
-        if best_key is None:
-            return jsonify(error="一致なし", score=0), 404
+        # ③ スコア降順にソート
+        scores.sort(key=lambda x: x[1], reverse=True)
 
-        # しきい値以下は認識失敗
-        if best_score < 0.5:
-            return jsonify(error="認識精度不足", score=round(best_score, 3)), 404
+        # ④ top3 を返す
+        top3 = [{
+            "key":   k,
+            "name":  name_mapping.get(k, os.path.splitext(k)[0]),
+            "score": round(s, 4)
+        } for k, s in scores[:3]]
 
-        predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
-        return jsonify(name=predicted, score=round(best_score, 4)), 200
+        return jsonify(candidates=top3), 200
 
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
 
+     
 
 # Blueprint 登録と起動
 app.register_blueprint(api, url_prefix="/api")
