@@ -12,25 +12,22 @@ from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import cv2
 
-
-# 追加：ORB とマッチャー
-orb = cv2.ORB_create()
-bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-# トランケートされた画像も読み込めるように
-ImageFile.LOAD_TRUNCATED_IMAGES = True
+# S3 クライアント（環境変数の認証情報を利用）
+s3 = boto3.client("s3")
 
 # 環境変数から S3 バケット名を取得
 S3_BUCKET = os.environ["S3_BUCKET"]
+
+# Flask アプリ設定
+app = Flask(__name__)
+CORS(app)
+app.logger.setLevel(logging.INFO)
 
 # ローカル登録用ディレクトリ＆マッピングファイル
 REGISTER_FOLDER = "registered_images"
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
 MAPPING_FILE = "name_mapping.json"
 
-
-# S3 クライアント（環境変数の認証情報を利用）
-s3 = boto3.client("s3")
 
 # 商品名マッピングの読み込み
 try:
@@ -40,13 +37,14 @@ except FileNotFoundError:
     name_mapping = {}
 
 
-# ── ここから追加 ──
+
 # S3 に現在存在しているキーを全部拾ってセット化
 paginator   = s3.get_paginator("list_objects_v2")
 valid_keys  = set()
 for page in paginator.paginate(Bucket=S3_BUCKET):
     for obj in page.get("Contents", []):
         valid_keys.add(obj["Key"])
+
 
 # name_mapping をフィルタリング
 orig_count = len(name_mapping)
@@ -58,15 +56,25 @@ filtered_count = len(name_mapping)
 app.logger.info(
     f"マッピングフィルタリング: 元{orig_count}件 → 現在S3上にあるのは{filtered_count}件"
 )
+
+
+
+# 追加：ORB とマッチャー
+orb = cv2.ORB_create()
+bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+
+# トランケートされた画像も読み込めるように
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+
+
+
+
 # ── ここまで追加 ──
 
 
 
-
-# Flask アプリ設定
-app = Flask(__name__)
-CORS(app)
-app.logger.setLevel(logging.INFO)
 
 # 画像の前処理：グレースケール＋リサイズ＋コントラスト調整
 def preprocess_pil(img: Image.Image, size=200) -> Image.Image:
@@ -127,9 +135,6 @@ def crop_to_object(pil_img, thresh=200):
 
 
 
-
-# S3 クライアント（環境変数の認証情報を利用）
-s3 = boto3.client("s3")
 
 @app.route("/ping")
 def ping():
