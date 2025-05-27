@@ -6,6 +6,7 @@ charset-normalizer==3.4.2
 click==8.2.0
 Flask==3.1.1
 flask-cors==6.0.0
+gunicorn==23.0.0
 idna==3.10
 imageio==2.37.0
 itsdangerous==2.2.0
