@@ -28,6 +28,10 @@ REGISTER_FOLDER = "registered_images"
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
 MAPPING_FILE = "name_mapping.json"
 
+
+# S3 クライアント（環境変数の認証情報を利用）
+s3 = boto3.client("s3")
+
 # 商品名マッピングの読み込み
 try:
     with open(MAPPING_FILE, "r", encoding="utf-8") as f:
