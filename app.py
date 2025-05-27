@@ -10,6 +10,7 @@ from flask_cors import CORS
 from PIL import Image, ImageOps, ImageFile
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
+import cv2
 
 # トランケートされた画像も読み込めるように
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -42,6 +43,27 @@ def preprocess_pil(img: Image.Image, size=200) -> Image.Image:
     img = ImageOps.autocontrast(img)
     return img
 
+
+# 追加：色ヒストグラム比較関数
+def calc_color_hist_score(pil_raw: Image.Image, pil_ref: Image.Image, size=100) -> float:
+    # PIL→NumPy (RGB)
+    raw = np.array(pil_raw.convert("RGB").resize((size, size)))
+    ref = np.array(pil_ref.convert("RGB").resize((size, size)))
+    # RGB→HSV
+    raw_hsv = cv2.cvtColor(raw, cv2.COLOR_RGB2HSV)
+    ref_hsv = cv2.cvtColor(ref, cv2.COLOR_RGB2HSV)
+    # ヒュー(色相)ヒストグラムだけ使用
+    h_bins = 50
+    raw_hist = cv2.calcHist([raw_hsv], [0], None, [h_bins], [0, 180])
+    ref_hist = cv2.calcHist([ref_hsv], [0], None, [h_bins], [0, 180])
+    cv2.normalize(raw_hist, raw_hist)
+    cv2.normalize(ref_hist, ref_hist)
+    # 相関係数で比較（1に近いほど似ている）
+    return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
+
+
+
+
 # S3 クライアント（環境変数の認証情報を利用）
 s3 = boto3.client("s3")
 
@@ -51,9 +73,6 @@ def ping():
 
 @app.route("/register_image", methods=["POST"])
 def register_image():
-    """
-    ローカルディレクトリに画像保存し、name_mapping.json に商品名を記録
-    """
     name = request.form.get("name")
     file = request.files.get("image")
     app.logger.info(f"📌 received name: {name}, image.filename: {file.filename if file else 'None'}")
@@ -77,7 +96,7 @@ def register_image():
 
         app.logger.info(f"✅ saved to: {save_path} (商品名: {name})")
        
-       # ← ここから追加
+       # S3 へアップロード
         s3.upload_file(
           Filename=save_path,
           Bucket=S3_BUCKET,
@@ -85,13 +104,8 @@ def register_image():
           ExtraArgs={'ContentType': 'image/jpeg'}
         )
         app.logger.info(f"☁️ uploaded to S3: s3://{S3_BUCKET}/{filename}")
-        # ← ここまで
-               
-       
-       
-       
+                    
         return "OK", 200
-
 
     except Exception as e:
         app.logger.exception(e)
@@ -99,14 +113,8 @@ def register_image():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    """
-    S3 バケット上の全画像と比較して最も類似度の高い商品を返却
-    """
     try:
-        # ←① ブロック最上部に入れる
-        app.logger.info("🛠 Enter /predict")
-
-   
+        app.logger.info("🛠 Enter /predict") 
         app.logger.info("📥 /predict リクエスト受信")
 
         # 本番：S3 上の URL が送られてくる場合
@@ -115,11 +123,9 @@ def predict():
             resp = requests.get(image_url)
             resp.raise_for_status()
             raw = Image.open(BytesIO(resp.content))
-
         # 開発：multipart で送られてきた画像
         elif "image" in request.files:
             raw = Image.open(request.files["image"].stream)
-
         else:
             return jsonify(error="画像がありません"), 400
 
@@ -128,7 +134,7 @@ def predict():
         q_arr = np.asarray(query)
 
 
-        # ←② ループ前に「何件あるか」出力する
+        # S3 上の全ファイル一覧を取得
         paginator = s3.get_paginator("list_objects_v2")
         pages    = list(paginator.paginate(Bucket=S3_BUCKET))
         total    = sum(len(p.get("Contents", [])) for p in pages)
@@ -138,7 +144,7 @@ def predict():
         best_key   = None
 
 
-        # ←③ 実際の比較ループの先頭に入れる
+        # 比較ループ
         for page in pages:
             for obj in page.get("Contents", []):
                 key = obj["Key"]
@@ -147,19 +153,29 @@ def predict():
 
                 app.logger.debug(f"🛠 comparing key: {key}")
 
-                # ここから既存の SSIM 計算＋ログ出力
+                # 参照画像取得＆前処理
                 resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
                 img  = Image.open(BytesIO(resp["Body"].read()))
                 ref  = preprocess_pil(img, size=100)
                 r_arr = np.asarray(ref)
-                score, _ = ssim(q_arr, r_arr, full=True)
-                app.logger.info(f"比較: {key} – 類似度スコア: {score:.4f}")
 
-                # ベスト更新
-                if score > best_score:
-                    best_score = score
+                # SSIM
+                score_ssim, _ = ssim(q_arr, r_arr, full=True)
+                # 色ヒストグラム
+                score_hist     = calc_color_hist_score(raw, img, size=100)
+                # 合成スコア
+                final_score    = 0.7 * score_ssim + 0.3 * score_hist
+
+                app.logger.info(
+                    f"比較: {key} – SSIM={score_ssim:.3f}, "
+                    f"HIST={score_hist:.3f}, FINAL={final_score:.3f}"
+                )
+
+                if final_score > best_score:
+                    best_score = final_score
                     best_key   = key
 
+                    
         # マッチなし
         if best_key is None:
             return jsonify(error="一致なし", score=0), 404
