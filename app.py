@@ -5,155 +5,127 @@ import uuid
 import requests
 import boto3
 from io import BytesIO
-from flask import Flask, request, jsonify
+from flask import Flask, Blueprint, request, jsonify
 from flask_cors import CORS
-from PIL import Image, ImageOps, ImageFile
+from PIL import Image, ImageOps, ImageFile, ImageFilter
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import cv2
 
+# ── 設定 ──────────────────────────────────────────────
+# トランケートされた画像も読み込めるように
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+# 環境変数から S3 バケット名を取得（boto3.client の前に）
+S3_BUCKET = os.environ["S3_BUCKET"]
+
 # S3 クライアント（環境変数の認証情報を利用）
 s3 = boto3.client("s3")
 
-# 環境変数から S3 バケット名を取得
-S3_BUCKET = os.environ["S3_BUCKET"]
-
-# Flask アプリ設定
+# Flask アプリと Blueprint
 app = Flask(__name__)
 CORS(app)
 app.logger.setLevel(logging.INFO)
+api = Blueprint("api", __name__)
 
 # ローカル登録用ディレクトリ＆マッピングファイル
 REGISTER_FOLDER = "registered_images"
 os.makedirs(REGISTER_FOLDER, exist_ok=True)
 MAPPING_FILE = "name_mapping.json"
 
-
-# 商品名マッピングの読み込み
+# 商品名マッピングの読み込み（S3 上に存在しないキーは除外）
 try:
     with open(MAPPING_FILE, "r", encoding="utf-8") as f:
         name_mapping = json.load(f)
 except FileNotFoundError:
     name_mapping = {}
 
-
-
-# S3 に現在存在しているキーを全部拾ってセット化
-paginator   = s3.get_paginator("list_objects_v2")
-valid_keys  = set()
-for page in paginator.paginate(Bucket=S3_BUCKET):
-    for obj in page.get("Contents", []):
-        valid_keys.add(obj["Key"])
-
-
-# name_mapping をフィルタリング
-orig_count = len(name_mapping)
-name_mapping = {
-    k: v for k, v in name_mapping.items()
-    if k in valid_keys
+valid_keys = {
+    obj["Key"]
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET)
+    for obj in page.get("Contents", [])
 }
-filtered_count = len(name_mapping)
-app.logger.info(
-    f"マッピングフィルタリング: 元{orig_count}件 → 現在S3上にあるのは{filtered_count}件"
+orig_count = len(name_mapping)
+name_mapping = {k: v for k, v in name_mapping.items() if k in valid_keys}
+app.logger.info(f"マッピングフィルタリング: 元{orig_count}件 → 現在S3上にあるのは{len(name_mapping)}件")
+
+
+# ── 特徴量マッチャー初期化 ─────────────────────────────
+orb   = cv2.ORB_create()
+bf    = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+sift  = cv2.SIFT_create()
+flann = cv2.FlannBasedMatcher(
+    {"algorithm": 1, "trees": 5},
+    {"checks": 50}
 )
 
+# ── ヘルパー関数 ────────────────────────────────────
+def crop_to_object(pil_img: Image.Image, thresh=200) -> Image.Image:
+    arr  = np.array(pil_img.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    _, binimg = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
+    cnts, _  = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return pil_img
+    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
+    return pil_img.crop((x, y, x+w, y+h))
 
-
-# 追加：ORB とマッチャー
-orb = cv2.ORB_create()
-bf  = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-# トランケートされた画像も読み込めるように
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-
-
-
-
-
-
-# ── ここまで追加 ──
-
-
-
-
-# 画像の前処理：グレースケール＋リサイズ＋コントラスト調整
 def preprocess_pil(img: Image.Image, size=200) -> Image.Image:
     img = img.convert("L")
     img = ImageOps.exif_transpose(img)
+    img = img.filter(ImageFilter.MedianFilter(3))
+    img = img.filter(ImageFilter.GaussianBlur(radius=1))
     img = ImageOps.fit(img, (size, size))
-    img = ImageOps.autocontrast(img)
+    img = ImageOps.autocontrast(img, cutoff=1)
     return img
 
-
-# 追加：色ヒストグラム比較関数
-def calc_color_hist_score(pil_raw: Image.Image, pil_ref: Image.Image, size=100) -> float:
-    # PIL→NumPy (RGB)
-    raw = np.array(pil_raw.convert("RGB").resize((size, size)))
-    ref = np.array(pil_ref.convert("RGB").resize((size, size)))
-    # RGB→HSV
+def calc_color_hist_score(raw_img: Image.Image, ref_img: Image.Image, size=100) -> float:
+    raw = np.array(raw_img.convert("RGB").resize((size, size)))
+    ref = np.array(ref_img.convert("RGB").resize((size, size)))
     raw_hsv = cv2.cvtColor(raw, cv2.COLOR_RGB2HSV)
     ref_hsv = cv2.cvtColor(ref, cv2.COLOR_RGB2HSV)
-    # ヒュー(色相)ヒストグラムだけ使用
     h_bins = 50
     raw_hist = cv2.calcHist([raw_hsv], [0], None, [h_bins], [0, 180])
     ref_hist = cv2.calcHist([ref_hsv], [0], None, [h_bins], [0, 180])
     cv2.normalize(raw_hist, raw_hist)
     cv2.normalize(ref_hist, ref_hist)
-    # 相関係数で比較（1に近いほど似ている）
     return float(cv2.compareHist(raw_hist, ref_hist, cv2.HISTCMP_CORREL))
 
-
-def calc_orb_score(pil_raw: Image.Image, pil_ref: Image.Image, size=200) -> float:
-    # PIL→グレースケール NumPy
-    raw = np.array(pil_raw.convert("L").resize((size, size)))
-    ref = np.array(pil_ref.convert("L").resize((size, size)))
-    # キーポイント＆特徴量抽出
+def calc_orb_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> float:
+    raw = np.array(raw_img.convert("L").resize((size, size)))
+    ref = np.array(ref_img.convert("L").resize((size, size)))
     kp1, des1 = orb.detectAndCompute(raw, None)
     kp2, des2 = orb.detectAndCompute(ref, None)
     if des1 is None or des2 is None:
         return 0.0
-    # マッチング
     matches = bf.match(des1, des2)
-    # マッチ数をベースに正規化
-    score = len(matches) / max(len(kp1), 1)
-    return float(score)
+    return float(len(matches) / max(len(kp1), 1))
+
+def calc_sift_score(raw_img: Image.Image, ref_img: Image.Image, size=200) -> float:
+    raw = np.array(raw_img.convert("L").resize((size, size)))
+    ref = np.array(ref_img.convert("L").resize((size, size)))
+    kp1, des1 = sift.detectAndCompute(raw, None)
+    kp2, des2 = sift.detectAndCompute(ref, None)
+    if des1 is None or des2 is None:
+        return 0.0
+    matches = flann.knnMatch(des1, des2, k=2)
+    good    = [m for m, n in matches if m.distance < 0.7 * n.distance]
+    return float(len(good) / max(len(kp1), 1))
 
 
-# 追加：ROI（パン領域）だけ切り出す関数
-def crop_to_object(pil_img, thresh=200):
-    arr = np.array(pil_img.convert("RGB"))
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    # 明るい背景を反転二値化
-    _, binimg = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
-    # 輪郭検出
-    cnts, _ = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return pil_img
-    c = max(cnts, key=cv2.contourArea)
-    x,y,w,h = cv2.boundingRect(c)
-    return pil_img.crop((x, y, x+w, y+h))
-
-
-
-
-@app.route("/ping")
-def ping():
-    return "ok", 200
-
-@app.route("/register_image", methods=["POST"])
+# ── エンドポイント：画像登録 ───────────────────────────
+@api.route("/register_image", methods=["POST"])
 def register_image():
     name = request.form.get("name")
     file = request.files.get("image")
-    app.logger.info(f"📌 received name: {name}, image.filename: {file.filename if file else 'None'}")
-
     if not name or not file:
         return "invalid request", 400
 
     try:
-        # リサイズ＆保存
         img = Image.open(file.stream)
         img = ImageOps.exif_transpose(img).convert("RGB")
         img.thumbnail((640, 640), Image.Resampling.LANCZOS)
+
         filename = f"{uuid.uuid4().hex}.jpg"
         save_path = os.path.join(REGISTER_FOLDER, filename)
         img.save(save_path, format="JPEG", quality=80, optimize=True)
@@ -163,60 +135,43 @@ def register_image():
         with open(MAPPING_FILE, "w", encoding="utf-8") as f:
             json.dump(name_mapping, f, ensure_ascii=False, indent=2)
 
-        app.logger.info(f"✅ saved to: {save_path} (商品名: {name})")
-       
-       # S3 へアップロード
+        # S3 アップロード
         s3.upload_file(
-          Filename=save_path,
-          Bucket=S3_BUCKET,
-          Key=filename,
-          ExtraArgs={'ContentType': 'image/jpeg'}
+            Filename=save_path,
+            Bucket=S3_BUCKET,
+            Key=filename,
+            ExtraArgs={"ContentType": "image/jpeg"}
         )
         app.logger.info(f"☁️ uploaded to S3: s3://{S3_BUCKET}/{filename}")
-                    
         return "OK", 200
 
     except Exception as e:
         app.logger.exception(e)
         return "error", 500
 
-@app.route("/predict", methods=["POST"])
+
+# ── エンドポイント：画像認識 ───────────────────────────
+@api.route("/predict", methods=["POST"])
 def predict():
     try:
-        app.logger.info("🛠 Enter /predict") 
-        app.logger.info("📥 /predict リクエスト受信")
-
-        # 本番：S3 上の URL が送られてくる場合
+        # 画像取得
         if "image_url" in request.form:
-            image_url = request.form["image_url"]
-            resp = requests.get(image_url)
+            resp = requests.get(request.form["image_url"])
             resp.raise_for_status()
             raw = Image.open(BytesIO(resp.content))
-            # ← URL で取得した画像も切り出す
-            raw = crop_to_object(raw)
-
-        # 開発：multipart で送られてきた画像
         elif "image" in request.files:
             raw = Image.open(request.files["image"].stream)
-            # ← カメラ撮影画像も切り出し
-            raw = crop_to_object(raw) 
         else:
             return jsonify(error="画像がありません"), 400
 
-        # クエリ画像の前処理
+        # ROI 切り出し＋前処理
+        raw = crop_to_object(raw)
         query = preprocess_pil(raw, size=100)
-        q_arr = np.asarray(query)
+        q_arr  = np.asarray(query)
 
-
-        # S3 上の全ファイル一覧を取得
-        paginator = s3.get_paginator("list_objects_v2")
-        pages    = list(paginator.paginate(Bucket=S3_BUCKET))
-        total    = sum(len(p.get("Contents", [])) for p in pages)
-        app.logger.info(f"🛠 S3 に登録されている画像数: {total}")
-
-        best_score = -1.0
-        best_key   = None
-
+        # S3 上の全キー取得
+        pages = list(s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET))
+        best_score, best_key = -1.0, None
 
         # 比較ループ
         for page in pages:
@@ -225,60 +180,43 @@ def predict():
                 if not key.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
 
-                app.logger.debug(f"🛠 comparing key: {key}")
-
-                # 参照画像取得＆前処理
+                # 参照画像取得
                 resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
                 img  = Image.open(BytesIO(resp["Body"].read()))
-                # パン領域だけ切り出し
-                img = crop_to_object(img)
-
+                img  = crop_to_object(img)
                 ref  = preprocess_pil(img, size=100)
                 r_arr = np.asarray(ref)
 
-                # SSIM
-                score_ssim, _ = ssim(q_arr, r_arr, full=True)
-                # 色ヒストグラム
-                score_hist     = calc_color_hist_score(raw, img, size=100)
-                # ORB 特徴点マッチング
-                score_orb      = calc_orb_score(raw, img, size=200)
-                # 合成スコア
-                final_score    = 0.5 * score_ssim + 0.2 * score_hist + 0.3 * score_orb
+                # 各種スコア算出
+                score_ssim = ssim(q_arr, r_arr, full=True)[0]
+                score_hist = calc_color_hist_score(raw, img)
+                score_sift = calc_sift_score(raw, img)
+                # ORB も試したい場合は calc_orb_score(raw, img)
 
-                app.logger.info(
-                    f"比較: {key} – "
-                    f"SSIM={score_ssim:.3f}, "
-                    f"HIST={score_hist:.3f}, "
-                    f"ORB={score_orb:.3f}, "
-                    f"FINAL={final_score:.3f}"
-                )
+                # 合成スコア（重みはチューニング可能）
+                final_score = 0.6 * score_ssim + 0.1 * score_hist + 0.3 * score_sift
 
                 if final_score > best_score:
-                    best_score = final_score
-                    best_key   = key
+                    best_score, best_key = final_score, key
 
-
-        # マッチなし
         if best_key is None:
             return jsonify(error="一致なし", score=0), 404
 
+        # しきい値以下は認識失敗
+        if best_score < 0.5:
+            return jsonify(error="認識精度不足", score=round(best_score, 3)), 404
 
-
-         # 信頼度しきい値チェック（0.8 は例なのでチューニングしてください）
-        if best_score < 0.2:
-            app.logger.warn(f"信頼度不足: best_score={best_score:.3f}")
-            return jsonify(error="認識精度不足", score=round(best_score,3)), 404
- 
         predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
-
-        app.logger.info(f"🎯 matched: {best_key} → {predicted} (score={best_score:.4f})")
-
         return jsonify(name=predicted, score=round(best_score, 4)), 200
 
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
 
+
+# Blueprint 登録と起動
+app.register_blueprint(api, url_prefix="/api")
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run("0.0.0.0", port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)
