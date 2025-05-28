@@ -218,11 +218,11 @@ def predict():
         # ▲ 追加部分
 
         # 閾値チェックをせず、必ず返す
-        return jsonify({
-            "best":       {"name": predicted, "score": round(best_score, 4)},
-            "candidates": candidates,
-            "all":        all_scores
-        }), 200
+        return jsonify(
+            best      = {"name": predicted, "score": round(best_score, 4)},
+            candidates= candidates,
+            all_scores= all_scores   # ← 文字列キーで定義
+        ), 200 
 
     except Exception as e:
         app.logger.exception(e)
