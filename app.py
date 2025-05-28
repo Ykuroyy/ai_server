@@ -1,5 +1,3 @@
-# app.py
-
 import os
 import logging
 import json
@@ -15,7 +13,7 @@ import numpy as np
 import cv2
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── 設定 ──────────────────────────────────────────────
 DATABASE_URL = os.environ["DATABASE_URL"]  # 例: postgres://user:pass@host/db
@@ -67,6 +65,26 @@ flann = cv2.FlannBasedMatcher(
 )
 
 # ── ヘルパー ────────────────────────────────────────────
+
+def compute_score_for_key(key, q_arr, raw_img):
+    # S3 から取得
+    resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
+    img = Image.open(BytesIO(resp["Body"].read()))
+    # 前処理
+    img = crop_to_object(img)
+    ref  = preprocess_pil(img, size=100)
+    r_arr = np.asarray(ref)
+    # スコア計算
+    score_ssim = ssim(q_arr, r_arr, full=True)[0]
+    score_hist = calc_color_hist_score(raw_img, img)
+    score_sift = calc_sift_score(raw_img, img)
+    return key, 0.2*score_ssim + 0.1*score_hist + 0.2*score_sift
+
+
+
+
+
+
 def crop_to_object(pil_img, thresh=200):
     arr  = np.array(pil_img.convert("RGB"))
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
@@ -187,36 +205,37 @@ def predict():
         query = preprocess_pil(raw, size=100)
         q_arr = np.asarray(query)
 
+        # S3 上のキーを一度に取り出し
+        keys = [
+        obj["Key"]
+        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET)
+        for obj in page.get("Contents", [])
+        if obj["Key"].lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+
         scores = []
-        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if not key.lower().endswith((".jpg", ".jpeg", ".png")):
-                    continue
-                resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
-                img  = Image.open(BytesIO(resp["Body"].read()))
-                img  = crop_to_object(img)
-                ref  = preprocess_pil(img, size=100)
-                r_arr = np.asarray(ref)
+        # スレッドで並列実行
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(compute_score_for_key, key, q_arr, raw): key for key in keys}
+            for fut in as_completed(futures):
+                try:
+                    scores.append(fut.result())
+                except Exception as e:
+                    app.logger.error(f"比較エラー {futures[fut]}: {e}")
 
-                score_ssim = ssim(q_arr, r_arr, full=True)[0]
-                score_hist = calc_color_hist_score(raw, img)
-                score_sift = calc_sift_score(raw, img)
-                final_score = 0.2*score_ssim + 0.1*score_hist + 0.2*score_sift
-
-                scores.append((key, final_score))
-
-        # 降順ソート
+        # あとは降順ソートして JSON 化
         scores.sort(key=lambda x: x[1], reverse=True)
 
+
+
+        # ベスト・候補３件
         best_key, best_score = scores[0]
-        predicted = name_mapping.get(best_key, os.path.splitext(best_key)[0])
         candidates = [
             {"name": name_mapping.get(k, os.path.splitext(k)[0]), "score": round(s,4)}
             for k, s in scores[1:4]
         ]
 
-        # ← ここから追記
+        # 全件スコア（DBマッピング版）
         session = Session()
         all_scores = []
         for key, score in scores:
@@ -228,12 +247,12 @@ def predict():
                 "score": round(score, 4)
             })
         session.close()
-        # ← ここまで追記      
-      
+         
+
         return jsonify(
-            best       = {"name": predicted, "score": round(best_score,4)},
-            candidates = candidates,
-            all_similarity_scores   = all_scores    # ← キー名を変更
+            best              = {"name": name_mapping.get(best_key, best_key), "score": round(best_score,4)},
+            candidates        = candidates,
+            all_similarity_scores = all_scores
         ), 200
 
     except Exception as e:
