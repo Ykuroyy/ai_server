@@ -104,35 +104,55 @@ def calc_sift_score(raw_img, ref_img, size=200):
     return float(len(good) / max(len(kp1), 1))
 
 # ── 画像登録エンドポイント ───────────────────────────────
+# app.py の /register_image 部分を以下のように置き換え
+
 @app.route("/register_image", methods=["POST"])
 def register_image():
     name = request.form.get("name")
-    file = request.files.get("image")
-    if not name or not file:
-        return "invalid request", 400
+    if not name:
+        return "invalid request (no name)", 400
+
+    # ① imageファイル or ② image_url のどちらかで画像を取得
+    if "image" in request.files:
+        file_stream = request.files["image"].stream
+    elif "image_url" in request.form:
+        try:
+            resp = requests.get(request.form["image_url"])
+            resp.raise_for_status()
+            file_stream = BytesIO(resp.content)
+        except Exception as e:
+            app.logger.error(f"Failed download image_url: {e}")
+            return "invalid image_url", 400
+    else:
+        return "invalid request (no image or image_url)", 400
+
     try:
-        img = Image.open(file.stream)
+        img = Image.open(file_stream)
         img = ImageOps.exif_transpose(img).convert("RGB")
         img.thumbnail((640, 640), Image.Resampling.LANCZOS)
         filename = f"{uuid.uuid4().hex}.jpg"
-        path = os.path.join(REGISTER_FOLDER, filename)
-        img.save(path, format="JPEG", quality=80, optimize=True)
+        save_path = os.path.join(REGISTER_FOLDER, filename)
+        img.save(save_path, format="JPEG", quality=80, optimize=True)
 
+        # name_mapping の更新
         name_mapping[filename] = name
         with open(MAPPING_FILE, "w", encoding="utf-8") as f:
             json.dump(name_mapping, f, ensure_ascii=False, indent=2)
 
+        # S3 アップロード
         s3.upload_file(
-            Filename=path,
+            Filename=save_path,
             Bucket=S3_BUCKET,
             Key=filename,
             ExtraArgs={"ContentType": "image/jpeg"}
         )
-        app.logger.info(f"☁️ uploaded to S3: {filename}")
+        app.logger.info(f"☁️ uploaded to S3: s3://{S3_BUCKET}/{filename}")
         return "OK", 200
+
     except Exception as e:
         app.logger.exception(e)
         return "error", 500
+      
 
 # ── 画像認識 & 結果返却（predict_result は廃止） ────────────────
 @app.route("/predict", methods=["POST"])
