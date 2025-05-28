@@ -184,7 +184,8 @@ def predict():
                 score_ssim = ssim(q_arr, r_arr, full=True)[0]
                 score_hist = calc_color_hist_score(raw, img)
                 score_sift = calc_sift_score(raw, img)
-                final_score = 0.6 * score_ssim + 0.1 * score_hist + 0.3 * score_sift
+                # final_score = 0.6 * score_ssim + 0.1 * score_hist + 0.3 * score_sift
+                final_score = 0.2 * score_ssim + 0.1 * score_hist + 0.2 * score_sift
 
                 scores.append((key, final_score))
 
