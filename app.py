@@ -13,8 +13,23 @@ from PIL import Image, ImageOps, ImageFile, ImageFilter
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import cv2
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.orm import sessionmaker, declarative_base
+
 
 # ── 設定 ──────────────────────────────────────────────
+DATABASE_URL = os.environ["DATABASE_URL"]  # 例: postgres://user:pass@host/db
+engine = create_engine(DATABASE_URL)
+Session  = sessionmaker(bind=engine)
+Base     = declarative_base()
+
+class ProductMapping(Base):
+    __tablename__ = "products"
+    id     = Column(Integer, primary_key=True)
+    name   = Column(String)
+    s3_key = Column(String)
+
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 S3_BUCKET = os.environ["S3_BUCKET"]
 s3 = boto3.client("s3")
@@ -200,11 +215,21 @@ def predict():
             {"name": name_mapping.get(k, os.path.splitext(k)[0]), "score": round(s,4)}
             for k, s in scores[1:4]
         ]
-        all_scores = [
-            {"name": name_mapping.get(k, os.path.splitext(k)[0]), "score": round(s,4)}
-            for k, s in scores
-        ]
 
+        # ← ここから追記
+        session = Session()
+        all_scores = []
+        for key, score in scores:
+            # DB に登録された名前を探す
+            prod = session.query(ProductMapping).filter_by(s3_key=key).first()
+            display_name = prod.name if prod else os.path.splitext(key)[0]
+            all_scores.append({
+                "name":  display_name,
+                "score": round(score, 4)
+            })
+        session.close()
+        # ← ここまで追記      
+      
         return jsonify(
             best       = {"name": predicted, "score": round(best_score,4)},
             candidates = candidates,
