@@ -207,12 +207,22 @@ def predict():
             for k, s in scores[1:4]
         ]
 
-        # 閾値チェックをせず、必ず返す
-        return jsonify(
-            best={"name": predicted, "score": round(best_score,4)},
-            candidates=candidates
-        ), 200
+        # ▼ 追加部分
+        all_scores = [
+            {
+                "name":  name_mapping.get(k, os.path.splitext(k)[0]),
+                "score": round(s, 4)
+            }
+            for k, s in scores
+        ]
+        # ▲ 追加部分
 
+        # 閾値チェックをせず、必ず返す
+        return jsonify({
+            "best":       {"name": predicted, "score": round(best_score, 4)},
+            "candidates": candidates,
+            "all":        all_scores
+        }), 200
 
     except Exception as e:
         app.logger.exception(e)
