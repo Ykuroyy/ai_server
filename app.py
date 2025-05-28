@@ -188,7 +188,7 @@ def predict():
 
                 scores.append((key, final_score))
 
-        # ── ここからが追加部分 ────────────────────────────
+
 
         # 比較結果をスコア降順にソート
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -206,13 +206,12 @@ def predict():
             for k, s in scores[1:4]
         ]
 
+        # 閾値チェックをせず、必ず返す
         return jsonify(
-            name=predicted,
-            score=round(best_score, 4),
+            best={"name": predicted, "score": round(best_score,4)},
             candidates=candidates
         ), 200
 
-            # ── ここまで追加部分 ────────────────────────────
 
     except Exception as e:
         app.logger.exception(e)
