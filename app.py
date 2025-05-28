@@ -188,7 +188,7 @@ def predict():
         return jsonify(
             best       = {"name": predicted, "score": round(best_score,4)},
             candidates = candidates,
-            all_scores = all_scores
+            all_similarity_scores   = all_scores    # ← キー名を変更
         ), 200
 
     except Exception as e:
