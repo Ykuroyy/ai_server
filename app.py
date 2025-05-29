@@ -6,6 +6,7 @@ import json
 import uuid
 import argparse
 from io import BytesIO
+from pathlib import Path
 
 import boto3
 import numpy as np
@@ -25,7 +26,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # DB
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "sqlite:///./local_dev.db"   # カレントディレクトリに local_dev.db というファイルを作ります
+    "sqlite:///./local_dev.db"
 )
 engine       = create_engine(DATABASE_URL)
 Session      = sessionmaker(bind=engine)
@@ -39,7 +40,6 @@ class ProductMapping(Base):
 
 # S3 クライアント
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-# 本番では必ず環境変数から取得。それ以外（開発時）はローカルフォルダを使う
 S3_BUCKET = os.environ.get("S3_BUCKET", "registered_images")
 s3        = boto3.client("s3")
 
@@ -101,7 +101,6 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
             vec[: min(dim, flat.shape[0])] = flat[:dim]
         descriptors.append(vec)
 
-        # 任意で .npy にも保存
         np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
 
     # 3) keys.json を保存
@@ -114,7 +113,7 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
     index.add(xb)
     faiss.write_index(index, index_path)
 
-    print(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
+    app.logger.info(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
 
 # ── 画像登録エンドポイント ───────────────────────────────
 
@@ -124,10 +123,10 @@ def register_image():
     if not name:
         return "invalid request (no name)", 400
 
-    # ファイル or URL
     if "image" in request.files:
         stream = request.files["image"].stream
     elif "image_url" in request.form:
+        import requests
         try:
             r = requests.get(request.form["image_url"])
             r.raise_for_status()
@@ -147,7 +146,6 @@ def register_image():
         os.makedirs("registered_images", exist_ok=True)
         img.save(path, format="JPEG", quality=80, optimize=True)
 
-        # S3 アップロード
         s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
         app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
 
@@ -161,7 +159,6 @@ def register_image():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        # 1) 画像取得
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
@@ -171,23 +168,16 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
-        # 2) 前処理→ flatten ベクトル
         raw  = crop_to_object(raw)
         pilq = preprocess_pil(raw, size=100)
         q_arr = np.asarray(pilq).flatten().astype("float32")
 
-        # 3) Faiss インデックスロード
-        dim   = q_arr.shape[0]
         index = faiss.read_index(INDEX_PATH)
+        D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
 
-        # 4) 検索 上位10
-        D, I = index.search(np.expand_dims(q_arr, 0), k=10)
-
-        # 5) keys.json からキーを得る
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        # 6) 結果整形
         session = Session()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
@@ -196,8 +186,8 @@ def predict():
             prod  = session.query(ProductMapping).filter_by(s3_key=key).first()
             name  = prod.name if prod else key.rsplit(".",1)[0]
             all_scores.append({"name": name, "score": round(score,4)})
-
         session.close()
+
         return jsonify(all_similarity_scores=all_scores), 200
 
     except Exception as e:
@@ -217,6 +207,12 @@ def main():
     if args.build_cache:
         build_cache()
     else:
+        # ── ここから自動ビルドチェック ─────────────────────────
+        if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+            app.logger.info("キャッシュ／インデックスが見つからないので自動生成します")
+            build_cache()
+        # ── ここまで自動ビルドチェック ────────────────────────
+
         port = int(os.environ.get("PORT", 10000))
         app.run(host="0.0.0.0", port=port, debug=False)
 
