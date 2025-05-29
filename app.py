@@ -203,36 +203,23 @@ def predict():
         session    = Session()
         seen_names = set()
         all_scores = []
+
         for dist, idx in zip(D[0], I[0]):
-            key  = keys[idx]
-            # DB から商品名を取ってくる
+            key = keys[idx]
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-            name = prod.name if prod else key.rsplit(".",1)[0]
+            name = prod.name if prod else key.rsplit(".", 1)[0]
             if name in seen_names:
                 continue
             seen_names.add(name)
-            # ここを指数関数に置き換える
-            
-            # ORBマッチ数による補正を入れる
-            match_count = 0
-            try:
-                # S3 から対象画像を一時取得
-                obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
-                db_img = Image.open(BytesIO(obj["Body"].read()))
-                match_count = calculate_orb_matches(raw, db_img)
-            except Exception as e:
-                app.logger.warning(f"⚠️ ORBマッチ失敗: {key} - {e}")
 
-            # スコアの補正：Faissスコア + ORB特徴マッチ
             sigma = 1000.0
-            score_faiss = float(np.exp(-dist / sigma))
-            score_total = round(score_faiss + match_count * 0.01, 4)
-    
+            score = round(np.exp(-dist / sigma), 4)
+
             all_scores.append({
                 "name": name,
-                "score": score_total
+                "score": score
             })
-                    
+        
         session.close()
 
         return jsonify(all_similarity_scores=all_scores), 200
