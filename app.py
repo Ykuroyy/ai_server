@@ -1,7 +1,6 @@
 # app.py
 
 import os
-import sys
 import json
 import uuid
 import argparse
@@ -16,7 +15,6 @@ from PIL import Image, ImageOps, ImageFile, ImageFilter
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from skimage.metrics import structural_similarity as ssim
 
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
@@ -28,9 +26,9 @@ DATABASE_URL = os.environ.get(
     "DATABASE_URL",
     "sqlite:///./local_dev.db"
 )
-engine       = create_engine(DATABASE_URL)
-Session      = sessionmaker(bind=engine)
-Base         = declarative_base()
+engine  = create_engine(DATABASE_URL)
+Session = sessionmaker(bind=engine)
+Base    = declarative_base()
 
 class ProductMapping(Base):
     __tablename__ = "products"
@@ -49,9 +47,18 @@ CORS(app)
 app.logger.setLevel("INFO")
 
 # キャッシュ置き場
-CACHE_DIR   = "cache"
-INDEX_PATH  = os.path.join(CACHE_DIR, "faiss.index")
-KEYS_PATH   = os.path.join(CACHE_DIR, "keys.json")
+CACHE_DIR  = "cache"
+INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
+KEYS_PATH  = os.path.join(CACHE_DIR, "keys.json")
+
+# ── 起動時キャッシュチェック ─────────────────────────────
+@app.before_first_request
+def ensure_cache():
+    # 最初のリクエストを受ける前に一度だけ呼ばれる
+    if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+        app.logger.info("キャッシュ／インデックスが見つからないので自動生成します")
+        build_cache()
+# ────────────────────────────────────────────────────────
 
 # ── 前処理ヘルパー ────────────────────────────────────
 
@@ -93,14 +100,13 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
         resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
         img  = Image.open(BytesIO(resp["Body"].read()))
         gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-        kp, des = orb.detectAndCompute(gray, None)
-
+        _, des = orb.detectAndCompute(gray, None)
         vec = np.zeros(dim, dtype="float32")
         if des is not None:
             flat = des.flatten()
             vec[: min(dim, flat.shape[0])] = flat[:dim]
         descriptors.append(vec)
-
+        # 任意で .npy にも保存
         np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
 
     # 3) keys.json を保存
@@ -148,7 +154,6 @@ def register_image():
 
         s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
         app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
-
         return "OK", 200
     except Exception as e:
         app.logger.exception(e)
@@ -159,6 +164,7 @@ def register_image():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
+        # リクエストから画像を取る
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
@@ -168,17 +174,19 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
+        # 前処理→クエリベクトル生成
         raw  = crop_to_object(raw)
         pilq = preprocess_pil(raw, size=100)
         q_arr = np.asarray(pilq).flatten().astype("float32")
 
+        # Faiss インデックス＆キー読み込み
         index = faiss.read_index(INDEX_PATH)
         D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
-
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        session = Session()
+        # 名前・スコア整形
+        session    = Session()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
             key   = keys[idx]
@@ -207,12 +215,7 @@ def main():
     if args.build_cache:
         build_cache()
     else:
-        # ── ここから自動ビルドチェック ─────────────────────────
-        if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
-            app.logger.info("キャッシュ／インデックスが見つからないので自動生成します")
-            build_cache()
-        # ── ここまで自動ビルドチェック ────────────────────────
-
+        # 通常は Flask アプリを起動（gunicorn ではここは無視される）
         port = int(os.environ.get("PORT", 10000))
         app.run(host="0.0.0.0", port=port, debug=False)
 
