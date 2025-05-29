@@ -109,23 +109,6 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
 
     app.logger.info(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
 
-
-def calculate_orb_matches(img1: Image.Image, img2: Image.Image) -> int:
-    orb = cv2.ORB_create()
-    gray1 = cv2.cvtColor(np.array(img1.convert("RGB")), cv2.COLOR_RGB2GRAY)
-    gray2 = cv2.cvtColor(np.array(img2.convert("RGB")), cv2.COLOR_RGB2GRAY)
-    kp1, des1 = orb.detectAndCompute(gray1, None)
-    kp2, des2 = orb.detectAndCompute(gray2, None)
-
-    if des1 is None or des2 is None:
-        return 0
-
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = bf.match(des1, des2)
-    return len(matches)
-
-
-
 # ── 画像登録エンドポイント ───────────────────────────────
 
 @app.route("/register_image", methods=["POST"])
@@ -203,23 +186,21 @@ def predict():
         session    = Session()
         seen_names = set()
         all_scores = []
-
         for dist, idx in zip(D[0], I[0]):
-            key = keys[idx]
+            key  = keys[idx]
+            # DB から商品名を取ってくる
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-            name = prod.name if prod else key.rsplit(".", 1)[0]
+            name = prod.name if prod else key.rsplit(".",1)[0]
             if name in seen_names:
                 continue
             seen_names.add(name)
-
+            # ここを指数関数に置き換える
             sigma = 1000.0
-            score = round(np.exp(-dist / sigma), 4)
-
+            score = float(np.exp(-dist / sigma))
             all_scores.append({
-                "name": name,
-                "score": score
+                "name":  name,
+                "score": round(score,4)
             })
-        
         session.close()
 
         return jsonify(all_similarity_scores=all_scores), 200
