@@ -194,7 +194,9 @@ def predict():
             if name in seen_names:
                 continue
             seen_names.add(name)
-            score = float(1.0 / (1 + dist))
+            # ここを指数関数に置き換える
+            sigma = 1000.0
+            score = float(np.exp(-dist / sigma))
             all_scores.append({
                 "name":  name,
                 "score": round(score,4)
