@@ -205,17 +205,23 @@ def predict():
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
             key  = keys[idx]
-            # DB から商品名を取ってくる
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
             name = prod.name if prod else key.rsplit(".",1)[0]
+
             if name in seen_names:
                 continue
             seen_names.add(name)
-                       # ここを指数関数に置き換える
-            sigma = 50.0  # ← ここを 10.0 や 20.0 に変えるだけ
+
+            sigma = 500.0
             score = float(np.exp(-dist / sigma))
 
-            # ✅ ログ出力（距離とスコア）
+            # ✅ 正しいJSON整形
+            all_scores.append({
+                "name":  name,
+                "score": round(score, 4)
+            })
+
+            # ✅ ログ出力もここでOK
             app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
