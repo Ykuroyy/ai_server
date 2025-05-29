@@ -51,15 +51,6 @@ CACHE_DIR  = "cache"
 INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
 KEYS_PATH  = os.path.join(CACHE_DIR, "keys.json")
 
-# ── 起動時キャッシュチェック ─────────────────────────────
-@app.before_first_request
-def ensure_cache():
-    # 最初のリクエストを受ける前に一度だけ呼ばれる
-    if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
-        app.logger.info("キャッシュ／インデックスが見つからないので自動生成します")
-        build_cache()
-# ────────────────────────────────────────────────────────
-
 # ── 前処理ヘルパー ────────────────────────────────────
 
 def crop_to_object(pil_img, thresh=200):
@@ -106,7 +97,6 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
             flat = des.flatten()
             vec[: min(dim, flat.shape[0])] = flat[:dim]
         descriptors.append(vec)
-        # 任意で .npy にも保存
         np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
 
     # 3) keys.json を保存
@@ -164,7 +154,6 @@ def register_image():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        # リクエストから画像を取る
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
@@ -174,18 +163,16 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
-        # 前処理→クエリベクトル生成
         raw  = crop_to_object(raw)
         pilq = preprocess_pil(raw, size=100)
         q_arr = np.asarray(pilq).flatten().astype("float32")
 
-        # Faiss インデックス＆キー読み込み
         index = faiss.read_index(INDEX_PATH)
         D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
+
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        # 名前・スコア整形
         session    = Session()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
@@ -202,6 +189,13 @@ def predict():
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
 
+# ── モジュール読み込み時にキャッシュチェック ───────────────────────
+if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+    # ローカル起動でも、Gunicorn 起動でもここが実行される
+    app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
+    build_cache()
+# ────────────────────────────────────────────────────────────────
+
 # ── エントリポイント ─────────────────────────────────
 
 def main():
@@ -215,7 +209,6 @@ def main():
     if args.build_cache:
         build_cache()
     else:
-        # 通常は Flask アプリを起動（gunicorn ではここは無視される）
         port = int(os.environ.get("PORT", 10000))
         app.run(host="0.0.0.0", port=port, debug=False)
 
