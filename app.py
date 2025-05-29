@@ -187,7 +187,6 @@ def register_image():
 # ── 画像認識エンドポイント ─────────────────────────────────
 @app.route("/predict", methods=["POST"])
 def predict():
-    try:
         # 1) 画像取得
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
@@ -256,7 +255,6 @@ def predict():
 
 
 # ── エントリポイント ─────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -268,10 +266,12 @@ def main():
     if args.build_cache:
         build_cache()
     else:
-        # ✅ この中に入れておくと、Flask 起動時に安全に実行される
-        if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
-            app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
-            build_cache(dim=256)
+        try:
+            if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+                app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
+                build_cache(dim=256)
+        except Exception as e:
+            app.logger.error(f"❌ 起動時のキャッシュ生成失敗: {e}")
 
         port = int(os.environ.get("PORT", 10000))
         app.run(host="0.0.0.0", port=port, debug=False)
