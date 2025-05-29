@@ -194,9 +194,10 @@ def predict():
             if name in seen_names:
                 continue
             seen_names.add(name)
-            # ここを指数関数に置き換える
-            sigma = 500.0
+                       # ここを指数関数に置き換える
+            sigma = 3.0  # ← ここを 10.0 や 20.0 に変えるだけ
             score = float(np.exp(-dist / sigma))
+
             all_scores.append({
                 "name":  name,
                 "score": round(score,4)
