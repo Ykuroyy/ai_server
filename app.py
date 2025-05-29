@@ -162,8 +162,6 @@ def register_image():
         return "error", 500
 
 # ── 画像認識エンドポイント ─────────────────────────────────
-# ✅ 改善版 app.py（学習用パンレジアプリに最適化）
-
 # 変更点要約：
 # 1. SIFTのsigmaをデフォルト（1.6）に戻す
 # 2. 特徴量をL2正規化
@@ -171,6 +169,7 @@ def register_image():
 # 4. JSON重複append削除
 #
 # 🔁 修正対象：predict()
+
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
@@ -227,8 +226,8 @@ def predict():
             app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
-                "name":  name,
-                "score": float(round(score, 4))
+                "name": name,
+                "score": round(score, 4)
             })
         session.close()
 
@@ -237,7 +236,6 @@ def predict():
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
-
 
 
 
