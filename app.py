@@ -246,15 +246,17 @@ def predict():
 
         return jsonify(all_similarity_scores=all_scores_serializable), 200
         
+# 🔽 ここに追記！ 🔽
+@app.route("/build_cache", methods=["POST"])
+def trigger_build_cache():
+    try:
+        build_cache(dim=256)
+        return jsonify({"status": "ok", "message": "キャッシュを再構築しました"}), 200
     except Exception as e:
-        app.logger.exception(e)
-        return jsonify(error="処理エラー"), 500
+        app.logger.exception("キャッシュ再構築エラー")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
-
-
-
-# ── エントリポイント ─────────────────────────────────
 # ── エントリポイント ─────────────────────────────────
 
 def main():
