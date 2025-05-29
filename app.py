@@ -227,8 +227,8 @@ def predict():
             app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
-                "name": name,
-                "score": round(score, 4)
+                "name":  name,
+                "score": float(round(score, 4))
             })
         session.close()
 
