@@ -162,6 +162,15 @@ def register_image():
         return "error", 500
 
 # ── 画像認識エンドポイント ─────────────────────────────────
+# ✅ 改善版 app.py（学習用パンレジアプリに最適化）
+
+# 変更点要約：
+# 1. SIFTのsigmaをデフォルト（1.6）に戻す
+# 2. 特徴量をL2正規化
+# 3. スコア計算を log or 1/(1+dist) に変更（分かりやすさ重視）
+# 4. JSON重複append削除
+#
+# 🔁 修正対象：predict()
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
@@ -170,63 +179,56 @@ def predict():
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
             import requests
-            r = requests.get(request.form["image_url"]); r.raise_for_status()
+            r = requests.get(request.form["image_url"])
+            r.raise_for_status()
             raw = Image.open(BytesIO(r.content))
         else:
-            return jsonify(error:="画像がありません"), 400
-       
+            return jsonify(error="画像がありません"), 400
+
+        # 2) 特徴量抽出（SIFT, L2正規化）
         gray = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
-        sift = cv2.SIFT_create()
+        sift = cv2.SIFT_create(sigma=1.6)
         _, des = sift.detectAndCompute(gray, None)
+
         q_arr = np.zeros(256, dtype="float32")
         if des is not None:
             flat = des.flatten()
-            q_arr[: min(256, flat.shape[0])] = flat[:256]
+            vec = flat[:256]
+            if np.linalg.norm(vec) != 0:
+                vec = vec / np.linalg.norm(vec)  # L2 normalize
+            q_arr[: len(vec)] = vec
         else:
             app.logger.warning("❌ クエリ画像の特徴量が抽出できませんでした")
             return jsonify(error="画像が不明瞭です"), 400
 
-
-
-        # 3) インデックス読み込み
+        # 3) インデックスとキー読み込み
         index = faiss.read_index(INDEX_PATH)
-
-        # 4) keys.json を読み込み
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        # 5) 検索：k はキー数に合わせる
+        # 4) 検索
         k = len(keys)
         D, I = index.search(np.expand_dims(q_arr, 0), k=k)
 
-        # 6) 結果整形（重複をスキップ）
-        session    = Session()
+        # 5) 結果整形（重複名除外）
+        session = Session()
         seen_names = set()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
-            key  = keys[idx]
+            key = keys[idx]
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-            name = prod.name if prod else key.rsplit(".",1)[0]
-
+            name = prod.name if prod else key.rsplit(".", 1)[0]
             if name in seen_names:
                 continue
             seen_names.add(name)
 
-            sigma = 500.0
-            score = float(np.exp(-dist / sigma))
-
-            # ✅ 正しいJSON整形
-            all_scores.append({
-                "name":  name,
-                "score": round(score, 4)
-            })
-
-            # ✅ ログ出力もここでOK
+            # 💡 スコア計算方法（わかりやすく）
+            score = 1 / (1 + dist)
             app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
-                "name":  name,
-                "score": round(score,4)
+                "name": name,
+                "score": round(score, 4)
             })
         session.close()
 
@@ -235,6 +237,7 @@ def predict():
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
+
 
 
 
