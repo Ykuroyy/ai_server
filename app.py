@@ -195,7 +195,7 @@ def predict():
                 continue
             seen_names.add(name)
             # ここを指数関数に置き換える
-            sigma = 1000.0
+            sigma = 500.0
             score = float(np.exp(-dist / sigma))
             all_scores.append({
                 "name":  name,
