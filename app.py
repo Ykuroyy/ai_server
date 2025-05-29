@@ -103,10 +103,10 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
         descriptors.append(vec)
         np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
      
-        # ✅ ここに追加（np.stack() の前）
-        if not descriptors:
-            app.logger.error("🚫 有効な特徴量が抽出された画像が 0 件です。キャッシュ作成中止")
-            return
+    # ✅ ここに追加（np.stack() の前）
+    if not descriptors:
+        app.logger.error("🚫 有効な特徴量が抽出された画像が 0 件です。キャッシュ作成中止")
+        return
 
     xb    = np.stack(descriptors)
 
