@@ -159,17 +159,17 @@ def predict():
             r = requests.get(request.form["image_url"]); r.raise_for_status()
             raw = Image.open(BytesIO(r.content))
         else:
-            return jsonify(error="画像がありません"), 400
-
-        # 2) ORB 特徴量 → 128 次元ベクトル
-        raw = crop_to_object(raw)
+            return jsonify(error:="画像がありません"), 400
+       
         gray = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
-        orb  = cv2.ORB_create()
-        _, des = orb.detectAndCompute(gray, None)
-        q_arr = np.zeros(128, dtype="float32")
+        sift = cv2.SIFT_create()
+        _, des = sift.detectAndCompute(gray, None)
+        q_arr = np.zeros(256, dtype="float32")  # SIFT の場合は特徴長を合わせる
         if des is not None:
             flat = des.flatten()
-            q_arr[: min(128, flat.shape[0])] = flat[:128]
+            q_arr[: min(256, flat.shape[0])] = flat[:256]
+
+
 
         # 3) インデックス読み込み
         index = faiss.read_index(INDEX_PATH)
