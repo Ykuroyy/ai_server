@@ -148,11 +148,10 @@ def register_image():
         return "error", 500
 
 # ── 画像認識エンドポイント ─────────────────────────────────
-
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        # --- 1) 画像取得 ---
+        # 1) 画像取得
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
@@ -162,42 +161,45 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
-        # --- 2) ORB で特徴量を取り出して 128 次元ベクトルに ---
-        raw  = crop_to_object(raw)
-        arr  = np.array(raw.convert("RGB"))
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        # 2) ORB 特徴量 → 128 次元ベクトル
+        raw = crop_to_object(raw)
+        gray = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
         orb  = cv2.ORB_create()
         _, des = orb.detectAndCompute(gray, None)
         q_arr = np.zeros(128, dtype="float32")
         if des is not None:
             flat = des.flatten()
             q_arr[: min(128, flat.shape[0])] = flat[:128]
-        else:
-            # 特徴点が取れない場合はエラー返却してもいい
-            return jsonify(error="特徴点が検出できませんでした"), 500
 
-        # --- 3) Faiss インデックスロード・検索 ---
+        # 3) インデックス読み込み
         index = faiss.read_index(INDEX_PATH)
-        D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
 
-        # --- 4) keys.json 読み込み ---
+        # 4) keys.json を読み込み
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
-        # --- 5) DB とスコアの整形 ---
-        session = Session()
+        # 5) 検索：k はキー数に合わせる
+        k = len(keys)
+        D, I = index.search(np.expand_dims(q_arr, 0), k=k)
+
+        # 6) 結果整形（重複をスキップ）
+        session    = Session()
+        seen_names = set()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
             key  = keys[idx]
+            # DB から商品名を取ってくる
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-            # ここは必ずヒットする想定
+            name = prod.name if prod else key.rsplit(".",1)[0]
+            if name in seen_names:
+                continue
+            seen_names.add(name)
             score = float(1.0 / (1 + dist))
             all_scores.append({
-                "name":  prod.name,
+                "name":  name,
                 "score": round(score,4)
             })
         session.close()
-
 
         return jsonify(all_similarity_scores=all_scores), 200
 
