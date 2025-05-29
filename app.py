@@ -163,9 +163,17 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
-        raw  = crop_to_object(raw)
-        pilq = preprocess_pil(raw, size=100)
-        q_arr = np.asarray(pilq).flatten().astype("float32")
+
+        # 2) ORB で特徴量を取り出して 128 次元ベクトルに
+        raw   = crop_to_object(raw)
+        gray  = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        orb   = cv2.ORB_create()
+        _, des = orb.detectAndCompute(gray, None)
+        q_arr = np.zeros(128, dtype="float32")
+        if des is not None:
+            flat = des.flatten()
+            q_arr[: min(128, flat.shape[0])] = flat[:128]
+    
 
         index = faiss.read_index(INDEX_PATH)
         D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
