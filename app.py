@@ -46,6 +46,9 @@ app = Flask(__name__)
 CORS(app)
 app.logger.setLevel("INFO")
 
+# ✅ ここに追記（テーブルを作成）
+Base.metadata.create_all(bind=engine)
+
 # キャッシュ置き場
 CACHE_DIR  = "cache"
 INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
@@ -94,8 +97,19 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
         if des is not None:
             flat = des.flatten()
             vec[: min(dim, flat.shape[0])] = flat[:dim]
+        else:
+            app.logger.warning(f"❌ 特徴量が取れませんでした: {key}")
+            continue  # スキップ！    
         descriptors.append(vec)
         np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
+     
+        # ✅ ここに追加（np.stack() の前）
+        if not descriptors:
+            app.logger.error("🚫 有効な特徴量が抽出された画像が 0 件です。キャッシュ作成中止")
+            return
+
+    xb    = np.stack(descriptors)
+
 
     # 3) keys.json を保存
     with open(KEYS_PATH, "w", encoding="utf-8") as f:
@@ -164,10 +178,13 @@ def predict():
         gray = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
         sift = cv2.SIFT_create()
         _, des = sift.detectAndCompute(gray, None)
-        q_arr = np.zeros(256, dtype="float32")  # SIFT の場合は特徴長を合わせる
+        q_arr = np.zeros(256, dtype="float32")
         if des is not None:
             flat = des.flatten()
             q_arr[: min(256, flat.shape[0])] = flat[:256]
+        else:
+            app.logger.warning("❌ クエリ画像の特徴量が抽出できませんでした")
+            return jsonify(error="画像が不明瞭です"), 400
 
 
 
