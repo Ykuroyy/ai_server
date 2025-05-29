@@ -222,7 +222,7 @@ def predict():
             seen_names.add(name)
 
             # 💡 スコア計算方法（わかりやすく）
-            score = 1 / (1 + dist)
+            score = max(0.0, 1 - dist / 10000000)
             app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
@@ -230,6 +230,11 @@ def predict():
                 "score": round(score, 4)
             })
         session.close()
+
+        # JSONに返せる形式に変換（ここが重要！）
+        all_scores_serializable = [
+            {"name": s["name"], "score": float(s["score"])} for s in all_scores
+        ]
 
         return jsonify(all_similarity_scores=all_scores_serializable), 200
         
