@@ -12,6 +12,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import DateTime
+
 
 # --- 共通設定 ---
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -32,6 +34,8 @@ class ProductMapping(Base):
     id     = Column(Integer, primary_key=True)
     name   = Column(String)
     s3_key = Column(String)
+    created_at = Column(DateTime)  # ← 追加
+    updated_at = Column(DateTime)  # ← 追加
 
 # --- Flask 初期化 ---
 app = Flask(__name__)
@@ -59,9 +63,16 @@ def register_image():
 
         s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType": "image/jpeg"})
         session = Session()
-        session.add(ProductMapping(name=name, s3_key=filename))
+        new_product = ProductMapping(
+            name=name,
+            s3_key=filename,
+            created_at=datetime.utcnow(),  # ← 追加
+            updated_at=datetime.utcnow()   # ← 追加
+        )
+        session.add(new_product)
         session.commit()
         session.close()
+   
         return "OK", 200
     except Exception as e:
         app.logger.exception("登録失敗")
