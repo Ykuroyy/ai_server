@@ -109,6 +109,23 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
 
     app.logger.info(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
 
+
+def calculate_orb_matches(img1: Image.Image, img2: Image.Image) -> int:
+    orb = cv2.ORB_create()
+    gray1 = cv2.cvtColor(np.array(img1.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    gray2 = cv2.cvtColor(np.array(img2.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    kp1, des1 = orb.detectAndCompute(gray1, None)
+    kp2, des2 = orb.detectAndCompute(gray2, None)
+
+    if des1 is None or des2 is None:
+        return 0
+
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des1, des2)
+    return len(matches)
+
+
+
 # ── 画像登録エンドポイント ───────────────────────────────
 
 @app.route("/register_image", methods=["POST"])
@@ -195,12 +212,27 @@ def predict():
                 continue
             seen_names.add(name)
             # ここを指数関数に置き換える
+            
+            # ORBマッチ数による補正を入れる
+            match_count = 0
+            try:
+                # S3 から対象画像を一時取得
+                obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
+                db_img = Image.open(BytesIO(obj["Body"].read()))
+                match_count = calculate_orb_matches(raw, db_img)
+            except Exception as e:
+                app.logger.warning(f"⚠️ ORBマッチ失敗: {key} - {e}")
+
+            # スコアの補正：Faissスコア + ORB特徴マッチ
             sigma = 1000.0
-            score = float(np.exp(-dist / sigma))
+            score_faiss = float(np.exp(-dist / sigma))
+            score_total = round(score_faiss + match_count * 0.01, 4)
+    
             all_scores.append({
-                "name":  name,
-                "score": round(score,4)
+                "name": name,
+                "score": score_total
             })
+                    
         session.close()
 
         return jsonify(all_similarity_scores=all_scores), 200
