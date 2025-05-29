@@ -73,7 +73,7 @@ def preprocess_pil(img, size=100):
 
 # ── キャッシュ構築機能 ─────────────────────────────────
 
-def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
+def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
     os.makedirs(cache_dir, exist_ok=True)
 
     # 1) DB に登録されている s3_key のみ取得
@@ -214,10 +214,8 @@ def predict():
 
 # ── モジュール読み込み時にキャッシュチェック ───────────────────────
 if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
-    # ローカル起動でも、Gunicorn 起動でもここが実行される
     app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
-    build_cache()
-# ────────────────────────────────────────────────────────────────
+    build_cache(dim=256)
 
 # ── エントリポイント ─────────────────────────────────
 
