@@ -76,13 +76,11 @@ def preprocess_pil(img, size=100):
 def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=128):
     os.makedirs(cache_dir, exist_ok=True)
 
-    # 1) S3 からキー一覧
-    keys = [
-        obj["Key"]
-        for page in s3.get_paginator("list_objects_v2").paginate(Bucket=S3_BUCKET)
-        for obj in page.get("Contents", [])
-        if obj["Key"].lower().endswith((".jpg","jpeg","png"))
-    ]
+    # 1) DB に登録されている s3_key のみ取得
+    session = Session()
+    keys = [pm.s3_key for pm in session.query(ProductMapping).all()]
+    session.close()
+
     descriptors = []
 
     # 2) 各画像をダウンロード → ORB → 固定長ベクトル
