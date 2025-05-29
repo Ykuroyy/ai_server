@@ -59,11 +59,17 @@ def register_image_v2():
         if response.status_code != 200:
             return jsonify({"error": "画像取得失敗"}), 400
 
+        # 重複チェック（すでに同じ商品名が登録されていたら登録スキップ）
+        session = Session()
+        existing = session.query(ProductMapping).filter_by(name=product_name).first()
+        if existing:
+            session.close()
+            return jsonify({"message": "既に登録済み", "filename": existing.s3_key}), 200
+
         filename = f"{product_name}_{os.urandom(4).hex()}.jpg"
         s3_key = f"registered_images/{filename}"
         s3.upload_fileobj(BytesIO(response.content), S3_BUCKET, s3_key)
 
-        session = Session()
         new_product = ProductMapping(
             name=product_name,
             s3_key=s3_key,
@@ -80,6 +86,7 @@ def register_image_v2():
     except Exception as e:
         app.logger.error(f"❌ register_image_v2 エラー: {str(e)}")
         return jsonify({"error": "登録エラー", "detail": str(e)}), 500
+
 
 # --- 手動アップロード登録エンドポイント ---
 @app.route("/register_image", methods=["POST"])
