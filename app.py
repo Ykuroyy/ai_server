@@ -195,8 +195,11 @@ def predict():
                 continue
             seen_names.add(name)
                        # ここを指数関数に置き換える
-            sigma = 3.0  # ← ここを 10.0 や 20.0 に変えるだけ
+            sigma = 50.0  # ← ここを 10.0 や 20.0 に変えるだけ
             score = float(np.exp(-dist / sigma))
+
+            # ✅ ログ出力（距離とスコア）
+            app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
             all_scores.append({
                 "name":  name,
