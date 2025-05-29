@@ -231,8 +231,8 @@ def predict():
             })
         session.close()
 
-        return jsonify(all_similarity_scores=all_scores), 200
-
+        return jsonify(all_similarity_scores=all_scores_serializable), 200
+        
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
