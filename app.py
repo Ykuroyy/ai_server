@@ -187,19 +187,19 @@ def predict():
             keys = json.load(f)
 
         # --- 5) DB とスコアの整形 ---
-        session    = Session()
+        session = Session()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
             key  = keys[idx]
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-            if not prod:
-                continue
+            # ここは必ずヒットする想定
             score = float(1.0 / (1 + dist))
             all_scores.append({
                 "name":  prod.name,
                 "score": round(score,4)
             })
         session.close()
+
 
         return jsonify(all_similarity_scores=all_scores), 200
 
