@@ -154,6 +154,7 @@ def register_image():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
+        # --- 1) 画像取得 ---
         if "image" in request.files:
             raw = Image.open(request.files["image"].stream)
         elif "image_url" in request.form:
@@ -163,32 +164,41 @@ def predict():
         else:
             return jsonify(error="画像がありません"), 400
 
-
-        # 2) ORB で特徴量を取り出して 128 次元ベクトルに
-        raw   = crop_to_object(raw)
-        gray  = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
-        orb   = cv2.ORB_create()
+        # --- 2) ORB で特徴量を取り出して 128 次元ベクトルに ---
+        raw  = crop_to_object(raw)
+        arr  = np.array(raw.convert("RGB"))
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        orb  = cv2.ORB_create()
         _, des = orb.detectAndCompute(gray, None)
         q_arr = np.zeros(128, dtype="float32")
         if des is not None:
             flat = des.flatten()
             q_arr[: min(128, flat.shape[0])] = flat[:128]
-    
+        else:
+            # 特徴点が取れない場合はエラー返却してもいい
+            return jsonify(error="特徴点が検出できませんでした"), 500
 
+        # --- 3) Faiss インデックスロード・検索 ---
         index = faiss.read_index(INDEX_PATH)
         D, I  = index.search(np.expand_dims(q_arr, 0), k=10)
 
+        # --- 4) keys.json 読み込み ---
         with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
+        # --- 5) DB とスコアの整形 ---
         session    = Session()
         all_scores = []
         for dist, idx in zip(D[0], I[0]):
-            key   = keys[idx]
+            key  = keys[idx]
+            prod = session.query(ProductMapping).filter_by(s3_key=key).first()
+            if not prod:
+                continue
             score = float(1.0 / (1 + dist))
-            prod  = session.query(ProductMapping).filter_by(s3_key=key).first()
-            name  = prod.name if prod else key.rsplit(".",1)[0]
-            all_scores.append({"name": name, "score": round(score,4)})
+            all_scores.append({
+                "name":  prod.name,
+                "score": round(score,4)
+            })
         session.close()
 
         return jsonify(all_similarity_scores=all_scores), 200
@@ -196,6 +206,9 @@ def predict():
     except Exception as e:
         app.logger.exception(e)
         return jsonify(error="処理エラー"), 500
+
+
+
 
 # ── モジュール読み込み時にキャッシュチェック ───────────────────────
 if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
