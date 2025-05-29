@@ -23,7 +23,10 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # ── 共通設定 ─────────────────────────────────────────
 
 # DB
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "sqlite:///./local_dev.db"   # カレントディレクトリに local_dev.db というファイルを作ります
+)
 engine       = create_engine(DATABASE_URL)
 Session      = sessionmaker(bind=engine)
 Base         = declarative_base()
@@ -36,7 +39,8 @@ class ProductMapping(Base):
 
 # S3 クライアント
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-S3_BUCKET = os.environ["S3_BUCKET"]
+# 本番では必ず環境変数から取得。それ以外（開発時）はローカルフォルダを使う
+S3_BUCKET = os.environ.get("S3_BUCKET", "registered_images")
 s3        = boto3.client("s3")
 
 # Flask
