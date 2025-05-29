@@ -41,18 +41,29 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 S3_BUCKET = os.environ.get("S3_BUCKET", "registered_images")
 s3        = boto3.client("s3")
 
-# Flask
-app = Flask(__name__)
-CORS(app)
-app.logger.setLevel("INFO")
-
-# ✅ ここに追記（テーブルを作成）
-Base.metadata.create_all(bind=engine)
 
 # キャッシュ置き場
 CACHE_DIR  = "cache"
 INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
 KEYS_PATH  = os.path.join(CACHE_DIR, "keys.json")
+
+
+# Flask
+app = Flask(__name__)
+CORS(app)
+app.logger.setLevel("INFO")
+
+
+# ✅ ここに追加（Flask起動時にキャッシュがなければ自動生成）
+if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+    app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
+    build_cache(dim=256)
+
+
+# ✅ ここに追記（テーブルを作成）
+Base.metadata.create_all(bind=engine)
+
+
 
 # ── 前処理ヘルパー ────────────────────────────────────
 
@@ -124,7 +135,6 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
     app.logger.info(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
 
 # ── 画像登録エンドポイント ───────────────────────────────
-
 @app.route("/register_image", methods=["POST"])
 def register_image():
     name = request.form.get("name")
@@ -156,20 +166,22 @@ def register_image():
 
         s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
         app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
+
+        # ✅ DBに保存する部分（重要！）
+        session = Session()
+        product = ProductMapping(name=name, s3_key=filename)
+        session.add(product)
+        session.commit()
+        session.close()
+
         return "OK", 200
+
     except Exception as e:
         app.logger.exception(e)
         return "error", 500
 
-# ── 画像認識エンドポイント ─────────────────────────────────
-# 変更点要約：
-# 1. SIFTのsigmaをデフォルト（1.6）に戻す
-# 2. 特徴量をL2正規化
-# 3. スコア計算を log or 1/(1+dist) に変更（分かりやすさ重視）
-# 4. JSON重複append削除
-#
-# 🔁 修正対象：predict()
 
+# ── 画像認識エンドポイント ─────────────────────────────────
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
