@@ -172,58 +172,61 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
 # --- 画像認識エンドポイント ---
 @app.route("/predict", methods=["POST"])
 def predict():
-    if not os.path.exists(INDEX_PATH):
-        return jsonify({"error": "キャッシュ未構築です"}), 500
+    try:
+        if not os.path.exists(INDEX_PATH):
+            return jsonify({"error": "キャッシュ未構築です"}), 500
 
-    if "image" not in request.files:
-        return jsonify({"error": "画像がありません"}), 400
+        if "image" not in request.files:
+            return jsonify({"error": "画像がありません"}), 400
 
-    raw = Image.open(request.files["image"].stream).convert("RGB")
-    gray = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2GRAY)
-    sift = cv2.SIFT_create()
-    _, des = sift.detectAndCompute(gray, None)
+        raw = Image.open(request.files["image"].stream).convert("RGB")
+        gray = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2GRAY)
+        sift = cv2.SIFT_create()
+        _, des = sift.detectAndCompute(gray, None)
 
-    if des is None:
-        return jsonify({"error": "画像の特徴量が抽出できません"}), 400
+        if des is None:
+            return jsonify({"error": "画像の特徴量が抽出できません"}), 400
 
-    vec = des.flatten()[:256]
-    if np.linalg.norm(vec) != 0:
-        vec = vec / np.linalg.norm(vec)
+        vec = des.flatten()[:256]
+        if np.linalg.norm(vec) != 0:
+            vec = vec / np.linalg.norm(vec)
 
-    q_arr = np.zeros(256, dtype="float32")
-    q_arr[:len(vec)] = vec
+        q_arr = np.zeros(256, dtype="float32")
+        q_arr[:len(vec)] = vec
 
-    index = faiss.read_index(INDEX_PATH)
-    with open(KEYS_PATH, encoding="utf-8") as f:
-        keys = json.load(f)
+        index = faiss.read_index(INDEX_PATH)
+        with open(KEYS_PATH, encoding="utf-8") as f:
+            keys = json.load(f)
 
-    k = len(keys)
-    D, I = index.search(np.expand_dims(q_arr, 0), k=k)
+        k = len(keys)
+        D, I = index.search(np.expand_dims(q_arr, 0), k=k)
 
-    app.logger.info(f"🔍 検索結果: I={I[0]}, D={D[0]}")
-    app.logger.info(f"🔍 登録キー数: {len(keys)}")
+        app.logger.info(f"🔍 検索結果: I={I[0]}, D={D[0]}")
+        app.logger.info(f"🔍 登録キー数: {len(keys)}")
 
-    session = Session()
-    results = []
-    seen = set()
-    for dist, idx in zip(D[0], I[0]):
-        if idx < 0 or idx >= len(keys):  # ← インデックス範囲チェック
-            app.logger.warning(f"⚠️ 無効なインデックス: idx={idx}, 跳ばします")
-            continue
+        session = Session()
+        results = []
+        seen = set()
+        for dist, idx in zip(D[0], I[0]):
+            if idx < 0 or idx >= len(keys):
+                app.logger.warning(f"⚠️ 無効なインデックス: idx={idx}, スキップ")
+                continue
 
-        key = keys[idx]
-        prod = session.query(ProductMapping).filter_by(s3_key=key).first()
-        name = prod.name if prod else key.rsplit(".", 1)[0]
-        if name in seen:
-            continue
-        seen.add(name)
-        score = max(0.0, 1 - dist / 10000000)
-        results.append({"name": name, "score": round(score, 4)})
+            key = keys[idx]
+            prod = session.query(ProductMapping).filter_by(s3_key=key).first()
+            name = prod.name if prod else key.rsplit(".", 1)[0]
+            if name in seen:
+                continue
+            seen.add(name)
+            score = max(0.0, 1 - dist / 10000000)
+            results.append({"name": name, "score": round(score, 4)})
 
-    session.close()
+        session.close()
+        return jsonify(all_similarity_scores=results), 200
 
-    return jsonify(all_similarity_scores=results), 200
-
+    except Exception as e:
+        app.logger.exception("❌ /predict 処理中に例外が発生しました")
+        return jsonify({"error": "internal server error", "detail": str(e)}), 500
 
 
 
