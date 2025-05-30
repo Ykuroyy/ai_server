@@ -173,16 +173,26 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
+        app.logger.info("🟡 /predict 処理開始")
+
         if not os.path.exists(INDEX_PATH):
+            app.logger.error("🚫 キャッシュファイルが存在しません")
             return jsonify({"error": "キャッシュ未構築です"}), 500
 
         if "image" not in request.files:
+            app.logger.error("🚫 画像ファイルが含まれていません")
             return jsonify({"error": "画像がありません"}), 400
 
+        app.logger.info("📷 画像の読み込み開始")
         raw = Image.open(request.files["image"].stream).convert("RGB")
+        app.logger.info("📷 画像の読み込み成功")
+
         gray = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2GRAY)
+        app.logger.info("🧠 グレースケール変換成功")
+
         sift = cv2.SIFT_create()
         _, des = sift.detectAndCompute(gray, None)
+        app.logger.info(f"🔍 特徴量抽出結果: des is None? {des is None}")
 
         if des is None:
             return jsonify({"error": "画像の特徴量が抽出できません"}), 400
@@ -193,16 +203,20 @@ def predict():
 
         q_arr = np.zeros(256, dtype="float32")
         q_arr[:len(vec)] = vec
+        app.logger.info("📐 クエリベクトル生成完了")
 
+        app.logger.info("📦 FAISS インデックス読み込み開始")
         index = faiss.read_index(INDEX_PATH)
+        app.logger.info("📦 FAISS インデックス読み込み完了")
+
+        app.logger.info("🔑 KEYS 読み込み開始")
         with open(KEYS_PATH, encoding="utf-8") as f:
             keys = json.load(f)
+        app.logger.info(f"🔑 KEYS 読み込み完了: 件数={len(keys)}")
 
         k = len(keys)
         D, I = index.search(np.expand_dims(q_arr, 0), k=k)
-
-        app.logger.info(f"🔍 検索結果: I={I[0]}, D={D[0]}")
-        app.logger.info(f"🔍 登録キー数: {len(keys)}")
+        app.logger.info(f"🔍 類似検索完了: I={I[0]}, D={D[0]}")
 
         session = Session()
         results = []
@@ -222,14 +236,14 @@ def predict():
             results.append({"name": name, "score": round(score, 4)})
 
         session.close()
+        app.logger.info(f"✅ 類似結果生成完了: 件数={len(results)}")
         return jsonify(all_similarity_scores=results), 200
 
     except Exception as e:
         app.logger.exception("❌ /predict 処理中に例外が発生しました")
         return jsonify({"error": "internal server error", "detail": str(e)}), 500
 
-
-
+      
 
 # --- エントリポイント ---
 def main():
