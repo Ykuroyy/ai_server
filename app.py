@@ -110,6 +110,9 @@ def register_image_v2():
 
 def extract_sift(img, dim=256):
     """PIL画像をSIFT特徴量ベクトルに変換（L2正規化して256次元）"""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
     gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
     sift = cv2.SIFT_create()
     _, des = sift.detectAndCompute(gray, None)
