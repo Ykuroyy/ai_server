@@ -68,6 +68,44 @@ def trigger_build_cache():
         app.logger.exception("キャッシュ再構築エラー")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+
+@app.route("/register_image_v2", methods=["POST"])
+def register_image_v2():
+    try:
+        data = request.get_json()
+        image_url = data["image_url"]
+        name = data["name"]
+
+        if not image_url or not name:
+            return jsonify({"message": "image_url or name missing", "status": "error"}), 400
+
+        # S3 から画像をダウンロード
+        response = requests.get(image_url)
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+        img = preprocess_pil(img)
+
+        desc = extract_sift(img)
+        if desc is None:
+            return jsonify({"message": "特徴量が見つかりませんでした", "status": "error"}), 400
+
+        # 保存処理（例: S3キーとDB登録）
+        key = f"registered_images/{uuid.uuid4().hex}.jpg"
+        s3 = boto3.client("s3")
+        s3.upload_fileobj(BytesIO(response.content), os.environ["S3_BUCKET"], key)
+
+        # DB にも保存（任意）
+        session = Session()
+        session.add(ProductMapping(name=name, s3_key=key))
+        session.commit()
+
+        return jsonify({"message": "登録成功", "status": "ok"}), 200
+
+    except Exception as e:
+        app.logger.error(f"❌ register_image_v2 失敗: {e}")
+        return jsonify({"message": "内部エラー", "status": "error"}), 500
+
+
 # ── 前処理ヘルパー ────────────────────────────────────
 
 def crop_to_object(pil_img, thresh=200):
