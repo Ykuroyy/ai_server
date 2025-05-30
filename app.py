@@ -204,6 +204,9 @@ def predict():
     results = []
     seen = set()
     for dist, idx in zip(D[0], I[0]):
+        if idx < 0 or idx >= len(keys):
+            continue  # 無効なインデックスはスキップ
+
         key = keys[idx]
         prod = session.query(ProductMapping).filter_by(s3_key=key).first()
         name = prod.name if prod else key.rsplit(".", 1)[0]
@@ -212,6 +215,8 @@ def predict():
         seen.add(name)
         score = max(0.0, 1 - dist / 10000000)
         results.append({"name": name, "score": round(score, 4)})
+      
+
     session.close()
 
     return jsonify(all_similarity_scores=results), 200
