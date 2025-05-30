@@ -19,9 +19,12 @@ from flask_cors import CORS
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 
+from sqlalchemy.sql import func # func をインポート (デフォルトタイムスタンプ用)
+
 
 # ── 共通設定 ─────────────────────────────────────────
 
+# DB
 # DB
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -36,6 +39,9 @@ class ProductMapping(Base):
     id     = Column(Integer, primary_key=True)
     name   = Column(String)
     s3_key = Column(String)
+    # created_at と updated_at カラムを追加
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 # S3 クライアント
 ImageFile.LOAD_TRUNCATED_IMAGES = True
