@@ -107,12 +107,12 @@ def register_image_v2():
         # グローバルなs3クライアントとS3_BUCKET変数を使用
         s3.upload_fileobj(BytesIO(response.content), S3_BUCKET, key)
 
-        # DB にも保存（任意）
-        with Session() as session: # コンテキストマネージャを使用
-            session.add(ProductMapping(name=name, s3_key=key))
-            session.commit()
+        # DBへの保存はRails側で行うため、ここではs3_keyを返すだけにする
+        # with Session() as session: # コンテキストマネージャを使用
+        #     session.add(ProductMapping(name=name, s3_key=key))
+        #     session.commit()
 
-        return jsonify({"message": "登録成功", "status": "ok"}), 200
+        return jsonify({"message": "登録成功", "status": "ok", "s3_key": key}), 200
     
     except requests.exceptions.RequestException as e:
         app.logger.error(f"❌ register_image_v2 画像ダウンロード失敗: {e}")
@@ -281,12 +281,13 @@ def register_image():
 
         app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
 
-        with Session() as session: # コンテキストマネージャを使用
-            product = ProductMapping(name=name, s3_key=filename)
-            session.add(product)
-            session.commit()
+        # DBへの保存はRails側で行うため、ここではs3_keyを返すだけにする
+        # with Session() as session: # コンテキストマネージャを使用
+        #     product = ProductMapping(name=name, s3_key=filename)
+        #     session.add(product)
+        #     session.commit()
 
-        return "OK", 200
+        return jsonify({"message": "登録成功", "status": "ok", "s3_key": filename}), 200 # s3_keyを返すように変更
 
     except Exception as e:
         app.logger.exception(e) # トレースバックをログに出力
