@@ -1,4 +1,3 @@
-# app.py
 import os, json, uuid, argparse
 from io import BytesIO
 from pathlib import Path
@@ -47,6 +46,16 @@ app = Flask(__name__)
 CORS(app)
 Base.metadata.create_all(bind=engine)
 
+# --- 起動時にキャッシュなければ自動作成 ---
+@app.before_first_request
+def ensure_cache_ready():
+    if not os.path.exists(INDEX_PATH) or not os.path.exists(KEYS_PATH):
+        app.logger.info("⛏️ キャッシュが見つからないため再生成します")
+        try:
+            build_cache(dim=256)
+        except Exception as e:
+            app.logger.error(f"🚫 キャッシュ生成失敗: {e}")
+
 # --- v2: Railsから画像URLを受け取りS3に保存＋DB登録 ---
 @app.route("/register_image_v2", methods=["POST"])
 def register_image_v2():
@@ -59,7 +68,6 @@ def register_image_v2():
         if response.status_code != 200:
             return jsonify({"error": "画像取得失敗"}), 400
 
-        # 重複チェック（すでに同じ商品名が登録されていたら登録スキップ）
         session = Session()
         existing = session.query(ProductMapping).filter_by(name=product_name).first()
         if existing:
@@ -87,17 +95,12 @@ def register_image_v2():
         app.logger.error(f"❌ register_image_v2 エラー: {str(e)}")
         return jsonify({"error": "登録エラー", "detail": str(e)}), 500
 
-
-# --- 手動アップロード登録エンドポイント ---
+# --- 手動アップロード登録 ---
 @app.route("/register_image", methods=["POST"])
 def register_image():
     name = request.form.get("name")
-    if not name:
-        return "no name", 400
-
-    if "image" not in request.files:
-        return "no image", 400
-
+    if not name or "image" not in request.files:
+        return "name or image missing", 400
     try:
         img = Image.open(request.files["image"].stream).convert("RGB")
         img = ImageOps.exif_transpose(img)
@@ -118,7 +121,6 @@ def register_image():
         session.add(new_product)
         session.commit()
         session.close()
-
         return "OK", 200
     except Exception as e:
         app.logger.exception("登録失敗")
@@ -166,33 +168,22 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
     faiss.write_index(index, index_path)
     with open(KEYS_PATH, "w", encoding="utf-8") as f:
         json.dump(keys, f)
-
     app.logger.info(f"✅ キャッシュ生成: {len(keys)}件")
 
 # --- 画像認識エンドポイント ---
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        app.logger.info("🟡 /predict 処理開始")
-
         if not os.path.exists(INDEX_PATH):
-            app.logger.error("🚫 キャッシュファイルが存在しません")
             return jsonify({"error": "キャッシュ未構築です"}), 500
 
         if "image" not in request.files:
-            app.logger.error("🚫 画像ファイルが含まれていません")
             return jsonify({"error": "画像がありません"}), 400
 
-        app.logger.info("📷 画像の読み込み開始")
         raw = Image.open(request.files["image"].stream).convert("RGB")
-        app.logger.info("📷 画像の読み込み成功")
-
         gray = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2GRAY)
-        app.logger.info("🧠 グレースケール変換成功")
-
         sift = cv2.SIFT_create()
         _, des = sift.detectAndCompute(gray, None)
-        app.logger.info(f"🔍 特徴量抽出結果: des is None? {des is None}")
 
         if des is None:
             return jsonify({"error": "画像の特徴量が抽出できません"}), 400
@@ -200,32 +191,22 @@ def predict():
         vec = des.flatten()[:256]
         if np.linalg.norm(vec) != 0:
             vec = vec / np.linalg.norm(vec)
-
         q_arr = np.zeros(256, dtype="float32")
         q_arr[:len(vec)] = vec
-        app.logger.info("📐 クエリベクトル生成完了")
 
-        app.logger.info("📦 FAISS インデックス読み込み開始")
         index = faiss.read_index(INDEX_PATH)
-        app.logger.info("📦 FAISS インデックス読み込み完了")
-
-        app.logger.info("🔑 KEYS 読み込み開始")
         with open(KEYS_PATH, encoding="utf-8") as f:
             keys = json.load(f)
-        app.logger.info(f"🔑 KEYS 読み込み完了: 件数={len(keys)}")
 
         k = len(keys)
         D, I = index.search(np.expand_dims(q_arr, 0), k=k)
-        app.logger.info(f"🔍 類似検索完了: I={I[0]}, D={D[0]}")
 
         session = Session()
         results = []
         seen = set()
         for dist, idx in zip(D[0], I[0]):
             if idx < 0 or idx >= len(keys):
-                app.logger.warning(f"⚠️ 無効なインデックス: idx={idx}, スキップ")
                 continue
-
             key = keys[idx]
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
             name = prod.name if prod else key.rsplit(".", 1)[0]
@@ -236,14 +217,10 @@ def predict():
             results.append({"name": name, "score": round(score, 4)})
 
         session.close()
-        app.logger.info(f"✅ 類似結果生成完了: 件数={len(results)}")
         return jsonify(all_similarity_scores=results), 200
-
     except Exception as e:
         app.logger.exception("❌ /predict 処理中に例外が発生しました")
         return jsonify({"error": "internal server error", "detail": str(e)}), 500
-
-      
 
 # --- エントリポイント ---
 def main():
@@ -254,9 +231,6 @@ def main():
     if args.build_cache:
         build_cache()
     else:
-        if not Path(INDEX_PATH).exists():
-            app.logger.info("キャッシュが無いので自動作成")
-            build_cache(dim=256)
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
 
 if __name__ == "__main__":
