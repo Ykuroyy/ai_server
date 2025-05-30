@@ -1,15 +1,17 @@
 import os
 import json
-import logging
 import uuid
-from io import BytesIO
-from PIL import Image, ImageOps, ImageFile
+import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import boto3
+from PIL import Image, ImageOps, ImageFile
 import numpy as np
 import faiss
 import cv2
+from io import BytesIO
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+
 
 
 # ── 共通設定 ─────────────────────────────────────────
