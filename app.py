@@ -49,7 +49,7 @@ s3        = boto3.client("s3") # グローバルS3クライアント
 
 
 # 特徴量設定 (グローバル定数)
-FEATURE_DIM = 256
+FEATURE_DIM = 128 # SIFT記述子の平均を取るため128に変更
 SIFT_SIGMA = 1.6
 
 
@@ -136,27 +136,22 @@ def extract_sift(pil_img_gray, dim=FEATURE_DIM):
         contrastThreshold=0.025, # デフォルト(0.04)から調整する場合はコメントを外す
         edgeThreshold=12 # デフォルト(10)から調整する場合はコメントを外す
     )
-    _, des = sift.detectAndCompute(cv_gray_image, None)
+    keypoints, des = sift.detectAndCompute(cv_gray_image, None) # keypointsも受け取る (desがメイン)
     
-    if des is None:
+    if des is None or des.shape[0] == 0: # 記述子が見つからない、または空の場合
         return None
     
-    vec = des.flatten()
-    if vec.size == 0: # desがNoneでなくてもflatten結果が空になるケース対策
-        return None
+    # 検出された全記述子の平均を取る
+    # SIFT記述子はそれぞれ128次元なので、平均も128次元になる
+    # dim パラメータは FEATURE_DIM (128) を使うので、ここでは直接参照しない
+    vec = np.mean(des, axis=0).astype('float32')
 
-    # 固定長ベクトルにするためのパディング/トランケート
-    if vec.shape[0] < dim: # &lt; を < に修正
-        padded_vec = np.zeros(dim, dtype="float32")
-        padded_vec[:vec.shape[0]] = vec
-        vec = padded_vec
-    else:
-        vec = vec[:dim]
-
+    # L2正規化 (FaissでL2距離を使う場合、正規化は一般的)
     norm = np.linalg.norm(vec)
     if norm == 0: # ゼロ除算を避ける
         return None
     return vec / norm
+
 
 
 # ── 前処理ヘルパー ────────────────────────────────────
