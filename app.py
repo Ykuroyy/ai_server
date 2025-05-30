@@ -108,6 +108,20 @@ def register_image_v2():
         return jsonify({"message": "内部エラー", "status": "error"}), 500
 
 
+def extract_sift(img, dim=256):
+    """PIL画像をSIFT特徴量ベクトルに変換（L2正規化して256次元）"""
+    gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+    sift = cv2.SIFT_create()
+    _, des = sift.detectAndCompute(gray, None)
+    if des is None:
+        return None
+    vec = des.flatten()[:dim]
+    if np.linalg.norm(vec) == 0:
+        return None
+    return vec / np.linalg.norm(vec)
+
+
+
 # ── 前処理ヘルパー ────────────────────────────────────
 
 def crop_to_object(pil_img, thresh=200):
