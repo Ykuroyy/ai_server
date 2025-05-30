@@ -2,6 +2,8 @@ import os
 import json
 import uuid
 import argparse
+import requests
+
 from io import BytesIO
 from pathlib import Path
 
