@@ -200,12 +200,16 @@ def predict():
     k = len(keys)
     D, I = index.search(np.expand_dims(q_arr, 0), k=k)
 
+    app.logger.info(f"🔍 検索結果: I={I[0]}, D={D[0]}")
+    app.logger.info(f"🔍 登録キー数: {len(keys)}")
+
     session = Session()
     results = []
     seen = set()
     for dist, idx in zip(D[0], I[0]):
-        if idx < 0 or idx >= len(keys):
-            continue  # 無効なインデックスはスキップ
+        if idx < 0 or idx >= len(keys):  # ← インデックス範囲チェック
+            app.logger.warning(f"⚠️ 無効なインデックス: idx={idx}, 跳ばします")
+            continue
 
         key = keys[idx]
         prod = session.query(ProductMapping).filter_by(s3_key=key).first()
@@ -215,11 +219,14 @@ def predict():
         seen.add(name)
         score = max(0.0, 1 - dist / 10000000)
         results.append({"name": name, "score": round(score, 4)})
-      
 
     session.close()
 
     return jsonify(all_similarity_scores=results), 200
+
+
+
+
 
 # --- エントリポイント ---
 def main():
