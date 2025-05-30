@@ -1,236 +1,280 @@
-import os, json, uuid, argparse
+# app.py
+
+import os
+import json
+import uuid
+import argparse
 from io import BytesIO
 from pathlib import Path
-from datetime import datetime
-import numpy as np
-import cv2
-import faiss
-import boto3
-import requests
 
-from PIL import Image, ImageOps, ImageFile
+import boto3
+import numpy as np
+import faiss    # pip install faiss-cpu
+import cv2
+from PIL import Image, ImageOps, ImageFile, ImageFilter
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+
+from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# --- 共通設定 ---
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./local_dev.db")
-S3_BUCKET    = os.environ.get("S3_BUCKET", "registered_images")
+# ── 共通設定 ─────────────────────────────────────────
 
+# DB
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "sqlite:///./local_dev.db"
+)
 engine  = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)
 Base    = declarative_base()
-s3      = boto3.client(
-    's3',
-    region_name=os.getenv("AWS_REGION"),
-    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
-)
-
-CACHE_DIR  = "cache"
-INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
-KEYS_PATH  = os.path.join(CACHE_DIR, "keys.json")
 
 class ProductMapping(Base):
     __tablename__ = "products"
     id     = Column(Integer, primary_key=True)
     name   = Column(String)
     s3_key = Column(String)
-    created_at = Column(DateTime)
-    updated_at = Column(DateTime)
 
-# --- Flask 初期化 ---
+# S3 クライアント
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+S3_BUCKET = os.environ.get("S3_BUCKET", "registered_images")
+s3        = boto3.client("s3")
+
+
+# キャッシュ置き場
+CACHE_DIR  = "cache"
+INDEX_PATH = os.path.join(CACHE_DIR, "faiss.index")
+KEYS_PATH  = os.path.join(CACHE_DIR, "keys.json")
+
+
+# Flask
 app = Flask(__name__)
 CORS(app)
+app.logger.setLevel("INFO")
+
+
+# ✅ ここに追記（テーブルを作成）
 Base.metadata.create_all(bind=engine)
 
-# --- 起動時にキャッシュなければ自動作成 ---
-@app.before_first_request
-def ensure_faiss_cache():
-    index_path = "faiss.index"
-    if not os.path.exists(index_path):
-        print("⚠️ FAISS キャッシュが存在しません。構築を開始します...")
-        build_cache(dim=256) 
-        print("✅ FAISS index 再構築完了")
 
-# --- v2: Railsから画像URLを受け取りS3に保存＋DB登録 ---
-@app.route("/register_image_v2", methods=["POST"])
-def register_image_v2():
-    try:
-        data = request.get_json()
-        image_url = data["image_url"]
-        product_name = data["name"]
-
-        response = requests.get(image_url)
-        if response.status_code != 200:
-            return jsonify({"error": "画像取得失敗"}), 400
-
-        session = Session()
-        existing = session.query(ProductMapping).filter_by(name=product_name).first()
-        if existing:
-            session.close()
-            return jsonify({"message": "既に登録済み", "filename": existing.s3_key}), 200
-
-        filename = f"{product_name}_{os.urandom(4).hex()}.jpg"
-        s3_key = f"registered_images/{filename}"
-        s3.upload_fileobj(BytesIO(response.content), S3_BUCKET, s3_key)
-
-        new_product = ProductMapping(
-            name=product_name,
-            s3_key=s3_key,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        session.add(new_product)
-        session.commit()
-        session.close()
-
-        app.logger.info(f"✅ 画像保存成功: {filename}")
-        return jsonify({"message": "保存完了", "filename": filename}), 200
-
-    except Exception as e:
-        app.logger.error(f"❌ register_image_v2 エラー: {str(e)}")
-        return jsonify({"error": "登録エラー", "detail": str(e)}), 500
-
-# --- 手動アップロード登録 ---
-@app.route("/register_image", methods=["POST"])
-def register_image():
-    name = request.form.get("name")
-    if not name or "image" not in request.files:
-        return "name or image missing", 400
-    try:
-        img = Image.open(request.files["image"].stream).convert("RGB")
-        img = ImageOps.exif_transpose(img)
-        img.thumbnail((640, 640))
-        filename = f"{uuid.uuid4().hex}.jpg"
-        local_path = os.path.join("registered_images", filename)
-        os.makedirs("registered_images", exist_ok=True)
-        img.save(local_path, format="JPEG", quality=80)
-
-        s3.upload_file(local_path, S3_BUCKET, filename, ExtraArgs={"ContentType": "image/jpeg"})
-        session = Session()
-        new_product = ProductMapping(
-            name=name,
-            s3_key=filename,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
-        )
-        session.add(new_product)
-        session.commit()
-        session.close()
-        return "OK", 200
-    except Exception as e:
-        app.logger.exception("登録失敗")
-        return str(e), 500
-
-# --- キャッシュ構築エンドポイント ---
+# 🔽 ここに追記！ 🔽
 @app.route("/build_cache", methods=["POST"])
 def trigger_build_cache():
     try:
         build_cache(dim=256)
-        return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok", "message": "キャッシュを再構築しました"}), 200
     except Exception as e:
-        app.logger.exception("キャッシュ作成失敗")
-        return jsonify({"error": str(e)}), 500
+        app.logger.exception("キャッシュ再構築エラー")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- キャッシュ作成処理 ---
+# ── 前処理ヘルパー ────────────────────────────────────
+
+def crop_to_object(pil_img, thresh=200):
+    arr  = np.array(pil_img.convert("RGB"))
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    _, binimg = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
+    cnts, _  = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return pil_img
+    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
+    return pil_img.crop((x, y, x+w, y+h))
+
+def preprocess_pil(img, size=100):
+    img = img.convert("L")
+    img = ImageOps.exif_transpose(img)
+    img = img.filter(ImageFilter.MedianFilter(3))
+    img = img.filter(ImageFilter.GaussianBlur(radius=1))
+    img = ImageOps.fit(img, (size, size))
+    return ImageOps.autocontrast(img, cutoff=1)
+
+# ── キャッシュ構築機能 ─────────────────────────────────
+
 def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH, dim=256):
     os.makedirs(cache_dir, exist_ok=True)
+
+    # 1) DB に登録されている s3_key のみ取得
     session = Session()
-    keys = [p.s3_key for p in session.query(ProductMapping).all()]
+    keys = [pm.s3_key for pm in session.query(ProductMapping).all()]
     session.close()
 
     descriptors = []
+
+    # 2) 各画像をダウンロード → ORB → 固定長ベクトル
+    orb = cv2.ORB_create()
     for key in keys:
         resp = s3.get_object(Bucket=S3_BUCKET, Key=key)
         img  = Image.open(BytesIO(resp["Body"].read()))
         gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-        sift = cv2.SIFT_create()
-        _, des = sift.detectAndCompute(gray, None)
-
+        _, des = orb.detectAndCompute(gray, None)
         vec = np.zeros(dim, dtype="float32")
         if des is not None:
             flat = des.flatten()
-            vec[:min(dim, len(flat))] = flat[:dim]
-            descriptors.append(vec)
+            vec[: min(dim, flat.shape[0])] = flat[:dim]
         else:
-            app.logger.warning(f"❌ 特徴量抽出失敗: {key}")
-
+            app.logger.warning(f"❌ 特徴量が取れませんでした: {key}")
+            continue  # スキップ！    
+        descriptors.append(vec)
+        np.save(os.path.join(cache_dir, f"{key}.npy"), vec)
+     
+    # ✅ ここに追加（np.stack() の前）
     if not descriptors:
-        raise RuntimeError("🚫 特徴量ゼロ件。登録画像を確認してください")
+        app.logger.error("🚫 有効な特徴量が抽出された画像が 0 件です。キャッシュ作成中止")
+        return
 
-    xb = np.stack(descriptors)
+    xb    = np.stack(descriptors)
+
+
+    # 3) keys.json を保存
+    with open(KEYS_PATH, "w", encoding="utf-8") as f:
+        json.dump(keys, f, ensure_ascii=False, indent=2)
+
+    # 4) Faiss インデックス構築＋保存
+    xb    = np.stack(descriptors)
     index = faiss.IndexFlatL2(dim)
     index.add(xb)
     faiss.write_index(index, index_path)
-    with open(KEYS_PATH, "w", encoding="utf-8") as f:
-        json.dump(keys, f)
-    app.logger.info(f"✅ キャッシュ生成: {len(keys)}件")
 
-# --- 画像認識エンドポイント ---
+    app.logger.info(f"✅ キャッシュ({len(keys)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
+
+# ── 画像登録エンドポイント ───────────────────────────────
+@app.route("/register_image", methods=["POST"])
+def register_image():
+    name = request.form.get("name")
+    if not name:
+        return "invalid request (no name)", 400
+
+    if "image" in request.files:
+        stream = request.files["image"].stream
+    elif "image_url" in request.form:
+        import requests
+        try:
+            r = requests.get(request.form["image_url"])
+            r.raise_for_status()
+            stream = BytesIO(r.content)
+        except Exception as e:
+            app.logger.error(f"Failed download image_url: {e}")
+            return "invalid image_url", 400
+    else:
+        return "invalid request (no image or image_url)", 400
+
+    try:
+        img = Image.open(stream)
+        img = ImageOps.exif_transpose(img).convert("RGB")
+        img.thumbnail((640, 640), Image.Resampling.LANCZOS)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        path = os.path.join("registered_images", filename)
+        os.makedirs("registered_images", exist_ok=True)
+        img.save(path, format="JPEG", quality=80, optimize=True)
+
+        s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
+        app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
+
+        # ✅ DBに保存する部分（重要！）
+        session = Session()
+        product = ProductMapping(name=name, s3_key=filename)
+        session.add(product)
+        session.commit()
+        session.close()
+
+        return "OK", 200
+
+    except Exception as e:
+        app.logger.exception(e)
+        return "error", 500
+
+
+# ── 画像認識エンドポイント ─────────────────────────────────
 @app.route("/predict", methods=["POST"])
 def predict():
-    try:
-        if not os.path.exists(INDEX_PATH):
-            return jsonify({"error": "キャッシュ未構築です"}), 500
+        # 1) 画像取得
+        if "image" in request.files:
+            raw = Image.open(request.files["image"].stream)
+        elif "image_url" in request.form:
+            import requests
+            r = requests.get(request.form["image_url"])
+            r.raise_for_status()
+            raw = Image.open(BytesIO(r.content))
+        else:
+            return jsonify(error="画像がありません"), 400
 
-        if "image" not in request.files:
-            return jsonify({"error": "画像がありません"}), 400
-
-        raw = Image.open(request.files["image"].stream).convert("RGB")
-        gray = cv2.cvtColor(np.array(raw), cv2.COLOR_RGB2GRAY)
-        sift = cv2.SIFT_create()
+        # 2) 特徴量抽出（SIFT, L2正規化）
+        gray = cv2.cvtColor(np.array(raw.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        sift = cv2.SIFT_create(sigma=1.6)
         _, des = sift.detectAndCompute(gray, None)
 
-        if des is None:
-            return jsonify({"error": "画像の特徴量が抽出できません"}), 400
-
-        vec = des.flatten()[:256]
-        if np.linalg.norm(vec) != 0:
-            vec = vec / np.linalg.norm(vec)
         q_arr = np.zeros(256, dtype="float32")
-        q_arr[:len(vec)] = vec
+        if des is not None:
+            flat = des.flatten()
+            vec = flat[:256]
+            if np.linalg.norm(vec) != 0:
+                vec = vec / np.linalg.norm(vec)  # L2 normalize
+            q_arr[: len(vec)] = vec
+        else:
+            app.logger.warning("❌ クエリ画像の特徴量が抽出できませんでした")
+            return jsonify(error="画像が不明瞭です"), 400
 
+        # 3) インデックスとキー読み込み
         index = faiss.read_index(INDEX_PATH)
-        with open(KEYS_PATH, encoding="utf-8") as f:
+        with open(KEYS_PATH, "r", encoding="utf-8") as f:
             keys = json.load(f)
 
+        # 4) 検索
         k = len(keys)
         D, I = index.search(np.expand_dims(q_arr, 0), k=k)
 
+        # 5) 結果整形（重複名除外）
         session = Session()
-        results = []
-        seen = set()
+        seen_names = set()
+        all_scores = []
         for dist, idx in zip(D[0], I[0]):
-            if idx < 0 or idx >= len(keys):
-                continue
             key = keys[idx]
             prod = session.query(ProductMapping).filter_by(s3_key=key).first()
             name = prod.name if prod else key.rsplit(".", 1)[0]
-            if name in seen:
+            if name in seen_names:
                 continue
-            seen.add(name)
+            seen_names.add(name)
+
+            # 💡 スコア計算方法（わかりやすく）
             score = max(0.0, 1 - dist / 10000000)
-            results.append({"name": name, "score": round(score, 4)})
+            app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}")
 
+            all_scores.append({
+                "name": name,
+                "score": round(score, 4)
+            })
         session.close()
-        return jsonify(all_similarity_scores=results), 200
-    except Exception as e:
-        app.logger.exception("❌ /predict 処理中に例外が発生しました")
-        return jsonify({"error": "internal server error", "detail": str(e)}), 500
 
-# --- エントリポイント ---
+        # JSONに返せる形式に変換（ここが重要！）
+        all_scores_serializable = [
+            {"name": s["name"], "score": float(s["score"])} for s in all_scores
+        ]
+
+        return jsonify(all_similarity_scores=all_scores_serializable), 200
+        
+
+
+# ── エントリポイント ─────────────────────────────────
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--build-cache", action="store_true")
+    parser.add_argument(
+        "--build-cache", action="store_true",
+        help="S3 から特徴量キャッシュ＆Faissインデックスを作成"
+    )
     args = parser.parse_args()
 
     if args.build_cache:
         build_cache()
     else:
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+        try:
+            if not Path(INDEX_PATH).exists() or not Path(KEYS_PATH).exists():
+                app.logger.info("キャッシュ／インデックスが見つからないので自動生成します (モジュール読み込み時)")
+                build_cache(dim=256)
+        except Exception as e:
+            app.logger.error(f"❌ 起動時のキャッシュ生成失敗: {e}")
+
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host="0.0.0.0", port=port, debug=False)
 
 if __name__ == "__main__":
     main()
