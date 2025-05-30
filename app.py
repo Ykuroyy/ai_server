@@ -129,7 +129,13 @@ def extract_sift(pil_img_gray, dim=FEATURE_DIM):
         pil_img_gray = pil_img_gray.convert("L")
 
     cv_gray_image = np.array(pil_img_gray)
-    sift = cv2.SIFT_create(sigma=SIFT_SIGMA) # SIFTパラメータを統一
+    # SIFTパラメータを調整可能にする
+    sift = cv2.SIFT_create(
+        sigma=SIFT_SIGMA,
+        # nfeatures=0,  # デフォルトのままか、調整する場合はコメントを外す (例: 500)
+        contrastThreshold=0.03, # デフォルト(0.04)から調整する場合はコメントを外す
+        # edgeThreshold=12 # デフォルト(10)から調整する場合はコメントを外す
+    )
     _, des = sift.detectAndCompute(cv_gray_image, None)
     
     if des is None:
