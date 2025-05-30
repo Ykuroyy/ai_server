@@ -52,7 +52,7 @@ def ensure_faiss_cache():
     index_path = "faiss.index"
     if not os.path.exists(index_path):
         print("⚠️ FAISS キャッシュが存在しません。構築を開始します...")
-        build_index_from_registered_images()  # 自動構築処理
+        build_cache(dim=256) 
         print("✅ FAISS index 再構築完了")
 
 # --- v2: Railsから画像URLを受け取りS3に保存＋DB登録 ---
