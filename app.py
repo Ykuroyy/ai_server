@@ -16,15 +16,13 @@ from PIL import Image, ImageOps, ImageFile, ImageFilter
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, DateTime # DateTime をインポート
 from sqlalchemy.orm import sessionmaker, declarative_base
-
 from sqlalchemy.sql import func # func をインポート (デフォルトタイムスタンプ用)
 
 
 # ── 共通設定 ─────────────────────────────────────────
 
-# DB
 # DB
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -42,6 +40,7 @@ class ProductMapping(Base):
     # created_at と updated_at カラムを追加
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
 
 # S3 クライアント
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -141,7 +140,7 @@ def extract_sift(pil_img_gray, dim=FEATURE_DIM):
         return None
 
     # 固定長ベクトルにするためのパディング/トランケート
-    if vec.shape[0] < dim:
+    if vec.shape[0] < dim: # &lt; を < に修正
         padded_vec = np.zeros(dim, dtype="float32")
         padded_vec[:vec.shape[0]] = vec
         vec = padded_vec
@@ -355,7 +354,7 @@ def predict():
         with Session() as session: # コンテキストマネージャを使用
             seen_names = set()
             for dist, idx_in_index in zip(D[0], I[0]):
-                if idx_in_index < 0: # Faissが返す-1は無効なインデックス
+                if idx_in_index < 0: # Faissが返す-1は無効なインデックス. &lt; を < に修正
                     continue
                 
                 s3_key = indexed_s3_keys[idx_in_index]
@@ -370,7 +369,7 @@ def predict():
                     continue
                 seen_names.add(name)
 
-                score = round(1.0 / (1.0 + dist), 4) if dist >= 0 else 0.0
+                score = round(1.0 / (1.0 + dist), 4) if dist >= 0 else 0.0 # &gt;= を >= に修正
                 app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}, s3_key={s3_key}")
 
                 all_scores.append({
