@@ -165,7 +165,9 @@ def crop_to_object(pil_img, thresh=200): # この関数は現在使用されて�
     x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
     return pil_img.crop((x, y, x+w, y+h))
 
-def preprocess_pil(img, size=100):
+
+# def preprocess_pil(img, size=100): # 例: 現在の値から大きくしてみる (例: 100 -> 200)
+def preprocess_pil(img, size=200):
     img = ImageOps.exif_transpose(img) # EXIF情報に基づく回転を先に行う
     img = img.convert("L")
     img = img.filter(ImageFilter.MedianFilter(3))
