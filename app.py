@@ -156,16 +156,6 @@ def extract_sift(pil_img_gray, dim=FEATURE_DIM):
 
 # ── 前処理ヘルパー ────────────────────────────────────
 
-def crop_to_object(pil_img, thresh=200): # この関数は現在使用されていません
-    arr  = np.array(pil_img.convert("RGB"))
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    _, binimg = cv2.threshold(gray, thresh, 255, cv2.THRESH_BINARY_INV)
-    cnts, _  = cv2.findContours(binimg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
-        return pil_img
-    x, y, w, h = cv2.boundingRect(max(cnts, key=cv2.contourArea))
-    return pil_img.crop((x, y, x+w, y+h))
-
 
 # def preprocess_pil(img, size=100): # 例: 現在の値から大きくしてみる (例: 100 -> 200)
 def preprocess_pil(img, size=200):
@@ -240,62 +230,6 @@ def build_cache(cache_dir=CACHE_DIR, index_path=INDEX_PATH): # dim引数は不�
 
     app.logger.info(f"✅ キャッシュ({len(s3_keys_for_index)}件) & インデックスを生成しました → {cache_dir}/ , {index_path}")
 
-# ── 画像登録エンドポイント ───────────────────────────────
-@app.route("/register_image", methods=["POST"])
-def register_image():
-    name = request.form.get("name")
-    if not name:
-        return "invalid request (no name)", 400
-
-    if "image" in request.files:
-        stream = request.files["image"].stream
-    elif "image_url" in request.form:
-        # import requests # グローバルにあるので不要
-        try:
-            r = requests.get(request.form["image_url"])
-            r.raise_for_status()
-            stream = BytesIO(r.content)
-        except Exception as e:
-            app.logger.error(f"Failed download image_url: {e}")
-            return "invalid image_url", 400
-    else:
-        return "invalid request (no image or image_url)", 400
-
-    try:
-        img = Image.open(stream)
-        img = ImageOps.exif_transpose(img).convert("RGB")
-        img.thumbnail((640, 640), Image.Resampling.LANCZOS)
-        
-        # S3キーの形式を v2 と合わせる (ディレクトリ構造)
-        # filename = f"{uuid.uuid4().hex}.jpg" # 元の形式
-        filename = f"registered_images/{uuid.uuid4().hex}.jpg" # v2に合わせた形式
-        
-        # ローカル保存はS3アップロードが主なら不要かも
-        # path = os.path.join("registered_images", filename)
-        # os.makedirs("registered_images", exist_ok=True)
-        # img.save(path, format="JPEG", quality=80, optimize=True)
-        # s3.upload_file(path, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
-        
-        # S3へ直接アップロード
-        img_byte_arr = BytesIO()
-        img.save(img_byte_arr, format="JPEG", quality=80, optimize=True)
-        img_byte_arr.seek(0)
-        s3.upload_fileobj(img_byte_arr, S3_BUCKET, filename, ExtraArgs={"ContentType":"image/jpeg"})
-
-        app.logger.info(f"☁️ uploaded to S3://{S3_BUCKET}/{filename}")
-
-        # DBへの保存はRails側で行うため、ここではs3_keyを返すだけにする
-        # with Session() as session: # コンテキストマネージャを使用
-        #     product = ProductMapping(name=name, s3_key=filename)
-        #     session.add(product)
-        #     session.commit()
-
-        return jsonify({"message": "登録成功", "status": "ok", "s3_key": filename}), 200 # s3_keyを返すように変更
-
-    except Exception as e:
-        app.logger.exception(e) # トレースバックをログに出力
-        return "error", 500
-
 
 # ── 画像認識エンドポイント ─────────────────────────────────
 @app.route("/predict", methods=["POST"])
@@ -358,7 +292,7 @@ def predict():
         with Session() as session: # コンテキストマネージャを使用
             seen_names = set()
             for dist, idx_in_index in zip(D[0], I[0]):
-                if idx_in_index < 0: # Faissが返す-1は無効なインデックス. &lt; を < に修正
+                if idx_in_index < 0: # Faissが返す-1は無効なインデックス
                     continue
                 
                 s3_key = indexed_s3_keys[idx_in_index]
@@ -373,7 +307,7 @@ def predict():
                     continue
                 seen_names.add(name)
 
-                score = round(1.0 / (1.0 + dist), 4) if dist >= 0 else 0.0 # &gt;= を >= に修正
+                score = round(1.0 / (1.0 + dist), 4) if dist >= 0 else 0.0
                 app.logger.info(f"📊 dist={dist:.2f}, score={score:.4f}, name={name}, s3_key={s3_key}")
 
                 all_scores.append({
