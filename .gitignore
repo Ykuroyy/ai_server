@@ -1,9 +1,6 @@
 # Python virtual environments
 venv/
-venv*/ 
-*.pyc
-__pycache__/
-
+venv*/
 
 # Pythonキャッシュ
 __pycache__/
@@ -15,11 +12,25 @@ __pycache__/
 *.whl
 *.tar.gz
 
-# AI画像フォルダ
-registered_images/
-uploaded_images/
+registered_images
+uploaded_images
 
-echo "venv311/" >> .gitignore
+# ローカルデータベース
+local_dev.db
+
+
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ログファイル
+*.log
 
 
 
